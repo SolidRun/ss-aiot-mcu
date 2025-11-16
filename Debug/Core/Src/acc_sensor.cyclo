@@ -1,0 +1,8 @@
+../Core/Src/acc_sensor.c:15:16:ACC_I2C_Write	2
+../Core/Src/acc_sensor.c:20:16:ACC_I2C_Read	2
+../Core/Src/acc_sensor.c:25:5:ACC_Init	10
+../Core/Src/acc_sensor.c:75:5:ACC_ReadAxes	1
+../Core/Src/acc_sensor.c:80:6:ACC_CheckWakeUp	3
+../Core/Src/acc_sensor.c:96:5:ACC_getInt	1
+../Core/Src/acc_sensor.c:101:6:ACC_clearInt	1
+../Core/Src/acc_sensor.c:106:6:ACC_HandleInt	1

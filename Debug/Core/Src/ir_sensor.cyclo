@@ -1,0 +1,16 @@
+../Core/Src/ir_sensor.c:24:16:ir_sensor_write	1
+../Core/Src/ir_sensor.c:30:16:ir_sensor_read	1
+../Core/Src/ir_sensor.c:44:6:IR_SENSOR_InitCtx	1
+../Core/Src/ir_sensor.c:69:5:IR_SENSOR_CheckConnection	3
+../Core/Src/ir_sensor.c:85:6:IR_SENSOR_StartContinuous	1
+../Core/Src/ir_sensor.c:94:5:IR_SENSOR_ReadTObject	1
+../Core/Src/ir_sensor.c:102:5:IR_SENSOR_ReadTAmbient	1
+../Core/Src/ir_sensor.c:110:5:IR_SENSOR_ReadPresence	1
+../Core/Src/ir_sensor.c:118:5:IR_SENSOR_ReadMotion	1
+../Core/Src/ir_sensor.c:126:5:IR_SENSOR_ReadTAmbShock	1
+../Core/Src/ir_sensor.c:134:6:IR_SENSOR_ConfigINT	1
+../Core/Src/ir_sensor.c:145:5:IR_SENSOR_DRDY_Status	2
+../Core/Src/ir_sensor.c:155:5:CheckInterruptFlags	4
+../Core/Src/ir_sensor.c:179:5:IR_SENSOR_getInt	1
+../Core/Src/ir_sensor.c:185:6:IR_SENSOR_clearInt	1
+../Core/Src/ir_sensor.c:190:6:IR_HandleInt	1

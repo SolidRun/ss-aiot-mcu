@@ -1,0 +1,13 @@
+../Core/Src/protocol.c:15:6:Sensor_LED_On	1
+../Core/Src/protocol.c:19:6:Sensor_LED_Off	1
+../Core/Src/protocol.c:23:6:Sensor_LED_Read	2
+../Core/Src/protocol.c:32:6:Sensor_IR_Read	1
+../Core/Src/protocol.c:43:6:Sensor_IR_Config	1
+../Core/Src/protocol.c:49:6:Sensor_Accel_Read	1
+../Core/Src/protocol.c:55:6:Sensor_Accel_Config	1
+../Core/Src/protocol.c:60:6:Sensor_RTC_Read	1
+../Core/Src/protocol.c:77:6:Sensor_RTC_Config	1
+../Core/Src/protocol.c:81:6:Sensor_Charger_Read	1
+../Core/Src/protocol.c:91:6:Sensor_GPS_Read	1
+../Core/Src/protocol.c:100:6:INT_Read	1
+../Core/Src/protocol.c:114:6:Protocol_ProcessCommand	21

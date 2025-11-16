@@ -1,0 +1,5 @@
+../Core/Src/ublox.c:42:13:UBX_Send	24	static
+../Core/Src/ublox.c:47:13:UBX_CalcChecksum	32	static
+../Core/Src/ublox.c:59:6:UBlox_Init	8	static
+../Core/Src/ublox.c:68:6:UBlox_ReadNavPvt	128	static
+../Core/Src/ublox.c:98:6:UBlox_GetTimeGPS	64	static
