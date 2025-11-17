@@ -56,10 +56,10 @@ Response structure:
 |-------------------------------|--------------------------|--------------------------------------------|
 | Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON,0x00=OFF)        |
-| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,5,{0x01,0x02,0x02,0x03,0x03}}       |
+| Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
+| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,5,{INT, int16 presenceVal, int16 motionVal}}       |
 | Set IR threshold               | {0x13,0x02,0x01,{THS}}  | {0x00,0x00,{}}                             |
-| Read acceleration              | {0x12,0x03,0x00,{}}     | {0x00,1,{0x01}}                            |
+| Read acceleration              | {0x12,0x03,0x00,{}}     | {0x00,1,{INT}}                            |
 | Set ACC threshold              | {0x13,0x03,0x01,{THS}}  | {0x00,0x00,{}}                             |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,12,{lat, lon, hMSL}}                |
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,3,{power_source, battery_soc, charge_status}} |
