@@ -24,10 +24,70 @@ static volatile bool i2cBusy = false;
 uint8_t rxcount = 0;
 uint8_t expected_bytes = 3;
 
+/* ---------------------------------------------------------------------
+ * STUCK BUS RECOVERY
+ * ---------------------------------------------------------------------
+ * If the external CPU master dies (power-cycle or reset) in the middle
+ * of an I2C2 transaction, the STM32 I2C2 peripheral (acting as slave)
+ * can be left waiting for the next byte forever. Because clock
+ * stretching is enabled (NoStretchMode = DISABLE), the peripheral holds
+ * SCL low while it waits — and since the master is gone, that wait
+ * never ends. The bus is then stuck (SCL held low) until something
+ * forces the I2C2 peripheral itself to reset.
+ *
+ * HAL_I2C_DeInit()/Init() alone is NOT enough — it only resets the
+ * driver-level struct, not the peripheral's internal state machine.
+ * __HAL_RCC_I2C2_FORCE_RESET()/RELEASE_RESET() resets the peripheral at
+ * the clock-domain level, which does clear the stuck state.
+ *
+ * This is detected by polling the HAL I2C state from the main loop: if
+ * we remain in a "busy" state for longer than any real I2C2 transaction
+ * should ever take, we assume the bus is stuck and force a recovery.
+ * ----------------------------------------------------------------------*/
+
+#define I2C2_STUCK_TIMEOUT_MS 10U
+
+static uint32_t i2c2_state_entered_flag = 0;
+static uint32_t i2c2_counter_tick = 0;
+static HAL_I2C_StateTypeDef i2c2_last_state = HAL_I2C_STATE_RESET;
+
+/* Call this regularly from the main while(1) loop.
+ * Detects an I2C2 peripheral stuck in a busy state for too long
+ * (e.g. master died mid-transaction) and forces a recovery. */
+void I2C2_CheckStuckBus(void) {
+    HAL_I2C_StateTypeDef current_state = HAL_I2C_GetState(&hi2c2);
+
+    if (current_state != i2c2_last_state) {
+        i2c2_last_state = current_state;
+        i2c2_state_entered_flag = 1;
+        i2c2_counter_tick = 0;
+        return;
+    }
+    if(i2c2_state_entered_flag){
+    	i2c2_counter_tick ++ ;
+    }
+    bool is_busy_state =
+        (current_state == HAL_I2C_STATE_BUSY_RX) ||
+        (current_state == HAL_I2C_STATE_BUSY_TX) ||
+        (current_state == HAL_I2C_STATE_BUSY_RX_LISTEN) ||
+        (current_state == HAL_I2C_STATE_BUSY_TX_LISTEN);
+
+    if (is_busy_state) {
+        if ( i2c2_counter_tick  > I2C2_STUCK_TIMEOUT_MS) {
+        	resetI2C2();
+        	//NVIC_SystemReset();
+        }
+    }
+}
+
+
 /* I2C Slave init
  */
 void I2C_Slave_Init(void) {
 	HAL_I2C_EnableListen_IT(&hi2c2);
+	i2c2_state_entered_flag = 0;
+	i2c2_counter_tick = 0;
+	i2c2_last_state = HAL_I2C_GetState(&hi2c2);
 }
 
 /* Called when Master sends data
@@ -96,4 +156,3 @@ void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef *hi2c) {
     		HAL_I2C_EnableListen_IT(hi2c);
     }
 }
-

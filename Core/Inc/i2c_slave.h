@@ -16,5 +16,6 @@ void I2C_Slave_Init(void);
 /* Call inside main loop to handle commands */
 void I2C_Slave_Process(void);
 
+void I2C2_CheckStuckBus(void);
 #endif // I2C_SLAVE_H
 

@@ -74,8 +74,14 @@ void Sensor_RTC_Read(uint8_t *data, uint8_t *len) {
 
 }
 
-void Sensor_RTC_Config(uint8_t *cmd_data){
-	SyncRTCWithGPS();
+void Sensor_RTC_Config(uint8_t *cmd_data ,uint8_t *status){
+	*status = 1;
+	for (int i=0; i<3 ; i++){
+		if(SyncRTCWithGPS()){
+			*status = 0;
+			break;
+		}
+	}
 }
 
 void Sensor_Charger_Read(uint8_t *data, uint8_t *len) {
@@ -95,6 +101,14 @@ void Sensor_GPS_Read(uint8_t *data, uint8_t *len) {
 	memcpy(&data[0],  &nav.lat,  sizeof(nav.lat));
 	memcpy(&data[4],  &nav.lon,  sizeof(nav.lon));
 	memcpy(&data[8],  &nav.hMSL, sizeof(nav.hMSL));
+}
+
+void Sensor_GPS_Config(uint8_t *cmd_data){
+
+	int RSTN_PinState = cmd_data[0];
+	int EN_PinState = cmd_data[1];
+	HAL_GPIO_WritePin(GPIOB, GPS_RSTN_Pin, RSTN_PinState);
+	HAL_GPIO_WritePin(GNSS_PWR_EN_GPIO_Port, GNSS_PWR_EN_Pin, EN_PinState);
 }
 
 void INT_Read(uint8_t *data, uint8_t *len) {
@@ -165,8 +179,10 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         			Sensor_Accel_Config(cmd->data);
         			break;
         		case SENSOR_RTC:
-        			Sensor_RTC_Config(cmd->data);
+        			Sensor_RTC_Config(cmd->data , &resp->status);
         			break;
+        		case SENSOR_GPS:
+        			Sensor_GPS_Config(cmd->data);
                 default:
                     resp->status = 1; // Unknown sensor
                     break;

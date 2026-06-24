@@ -53,7 +53,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-void SyncRTCWithGPS();
+int SyncRTCWithGPS();
 void SomEnable(void);
 void SomDisable(void);
 void somSetInt(void);
@@ -83,6 +83,10 @@ void somClearINT(void);
 #define BATT_QON_GPIO_Port GPIOB
 #define GNSS_PWR_EN_Pin GPIO_PIN_8
 #define GNSS_PWR_EN_GPIO_Port GPIOA
+#define i2c2_SCL_Pin GPIO_PIN_9
+#define i2c2_SCL_GPIO_Port GPIOA
+#define i2c2_SDA_Pin GPIO_PIN_10
+#define i2c2_SDA_GPIO_Port GPIOA
 #define LED_MCU_Pin GPIO_PIN_12
 #define LED_MCU_GPIO_Port GPIOA
 #define MCU_INT_Pin GPIO_PIN_15

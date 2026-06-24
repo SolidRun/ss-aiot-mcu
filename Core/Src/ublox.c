@@ -1,5 +1,5 @@
 #include "ublox.h"
-
+#include <string.h>
 
 #define UBLOX_ADDR (0x42 << 1)
 
@@ -92,6 +92,7 @@ bool UBlox_ReadNavPvt(UBX_NAV_PVT_t* nav)
 
     // Copy payload to struct (little-endian)
     memcpy(nav, payload, sizeof(UBX_NAV_PVT_t));
+
     return true;
 }
 

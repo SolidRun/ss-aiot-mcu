@@ -29,7 +29,6 @@
 #include "bq25638.h"
 #include "rtc.h"
 #include "i2c_slave.h"
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,6 +56,8 @@ I2C_HandleTypeDef hi2c3;
 
 RTC_HandleTypeDef hrtc;
 
+TIM_HandleTypeDef htim6;
+
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
@@ -72,6 +73,7 @@ static void MX_I2C1_Init(void);
 static void MX_RTC_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 
 
@@ -86,14 +88,17 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 
 }
 
-void SyncRTCWithGPS(){
+int SyncRTCWithGPS(){
 	UBX_NAV_PVT_t nav;
+	memset(&nav, 0x00 , sizeof(UBX_NAV_PVT_t));
 	if(UBlox_ReadNavPvt(&nav)){
 		if (nav.valid & UBX_TIMEUTC_VALID_MASK) {
 			rtc_updeteTime(nav.hour, nav.min , nav.sec);
 			rtc_updeteDate(nav.month, nav.day , nav.year);
+			return 1;
 		}
 	}
+	return 0;
 }
 
 // Enable VIN_SOM_EN
@@ -120,6 +125,12 @@ uint8_t somGetInt(void) {
 void somClearINT(void) {
 	MCU_INT = 0;
 	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_RESET);
+}
+
+void resetI2C2(void){
+	HAL_I2C_DeInit(&hi2c2);
+	MX_I2C2_Init();
+	SomEnable();
 }
 
 
@@ -167,6 +178,7 @@ int main(void)
   MX_RTC_Init();
   MX_I2C2_Init();
   MX_USART3_UART_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
   HAL_Delay(1500);
@@ -178,18 +190,25 @@ int main(void)
   IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
 
   BQ25638_Init();
-  //BQ25638_Status_t s;
   SomEnable();
-  //int ret =0;
+  HAL_TIM_Base_Start_IT(&htim6);
+  //BQ25638_Status_t status1;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  //static led_flag=0;
   while (1)
   {
-	 // ret=ACC_CheckWakeUp();
 	 //s= BQ25638_GetStatus();
-	 //HAL_Delay(10);
+	 //SyncRTCWithGPS();
+	 //status1 = BQ25638_GetStatus();
+	 //led_flag++;
+	 //if(led_flag>100){
+		 //HAL_GPIO_TogglePin(LED_MCU_GPIO_Port, LED_MCU_Pin);
+		 //led_flag = 0;
+	 //}
+	 HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -331,7 +350,7 @@ static void MX_I2C2_Init(void)
 
   /* USER CODE END I2C2_Init 1 */
   hi2c2.Instance = I2C2;
-  hi2c2.Init.Timing = 0x00A03D53;
+  hi2c2.Init.Timing = 0x00303D5D;
   hi2c2.Init.OwnAddress1 = 48;
   hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -346,7 +365,7 @@ static void MX_I2C2_Init(void)
 
   /** Configure Analogue filter
   */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_DISABLE) != HAL_OK)
   {
     Error_Handler();
   }
@@ -496,6 +515,44 @@ static void MX_RTC_Init(void)
 }
 
 /**
+  * @brief TIM6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM6_Init(void)
+{
+
+  /* USER CODE BEGIN TIM6_Init 0 */
+
+  /* USER CODE END TIM6_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM6_Init 1 */
+
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 15999;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 999;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM6_Init 2 */
+
+  /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
   * @brief USART3 Initialization Function
   * @param None
   * @retval None
@@ -636,6 +693,7 @@ int _write(int fd, char * ptr, int len)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
+
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)

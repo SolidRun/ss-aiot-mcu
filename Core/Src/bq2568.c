@@ -85,7 +85,7 @@ HAL_StatusTypeDef BQ25638_SetTerminationCurrent(uint16_t mA) {
 BQ25638_Status_t BQ25638_GetStatus() {
 
 	BQ25638_Status_t status = {0};
-    uint8_t chg_status1;
+    uint8_t chg_status1 = 0;
     uint16_t raw;
 
     //Read battery status
