@@ -1,2 +1,0 @@
-../Core/Src/system_stm32u0xx.c:182:6:SystemInit	4
-../Core/Src/system_stm32u0xx.c:251:6:SystemCoreClockUpdate	14

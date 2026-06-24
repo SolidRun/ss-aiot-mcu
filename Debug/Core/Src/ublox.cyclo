@@ -1,5 +1,0 @@
-../Core/Src/ublox.c:42:13:UBX_Send	1
-../Core/Src/ublox.c:47:13:UBX_CalcChecksum	2
-../Core/Src/ublox.c:59:6:UBlox_Init	1
-../Core/Src/ublox.c:68:6:UBlox_ReadNavPvt	6
-../Core/Src/ublox.c:98:6:UBlox_GetTimeGPS	10

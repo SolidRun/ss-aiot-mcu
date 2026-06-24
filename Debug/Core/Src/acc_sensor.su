@@ -1,8 +1,0 @@
-../Core/Src/acc_sensor.c:15:16:ACC_I2C_Write	48	static
-../Core/Src/acc_sensor.c:20:16:ACC_I2C_Read	48	static
-../Core/Src/acc_sensor.c:25:5:ACC_Init	40	static
-../Core/Src/acc_sensor.c:75:5:ACC_ReadAxes	16	static
-../Core/Src/acc_sensor.c:80:6:ACC_CheckWakeUp	16	static
-../Core/Src/acc_sensor.c:96:5:ACC_getInt	8	static
-../Core/Src/acc_sensor.c:101:6:ACC_clearInt	8	static
-../Core/Src/acc_sensor.c:106:6:ACC_HandleInt	8	static
