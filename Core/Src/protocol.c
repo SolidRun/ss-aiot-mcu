@@ -11,6 +11,8 @@
 
 extern uint8_t ir_ths;
 extern uint8_t acc_ths;
+extern bool gps_time_synced;
+extern bool gps_time_sync_request;
 
 void Sensor_LED_On(void) {
 	HAL_GPIO_WritePin(LED_MCU_GPIO_Port, LED_MCU_Pin, GPIO_PIN_SET);
@@ -20,8 +22,9 @@ void Sensor_LED_Off(void) {
 	HAL_GPIO_WritePin(LED_MCU_GPIO_Port, LED_MCU_Pin, GPIO_PIN_RESET);
 }
 
-void Sensor_LED_Read(uint8_t *data, uint8_t *len){
+void Sensor_LED_Read(uint8_t *data, uint8_t *len, uint8_t *status){
 	*len = 1;
+	*status = 0;
 	if (HAL_GPIO_ReadPin(LED_MCU_GPIO_Port, LED_MCU_Pin)){
 		data[0] = 0x01;
 	}else{
@@ -29,10 +32,11 @@ void Sensor_LED_Read(uint8_t *data, uint8_t *len){
 	}
 }
 
-void Sensor_IR_Read(uint8_t *data, uint8_t *len) {
+void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 	int16_t presence, motion;
     IR_SENSOR_ReadPresence(&presence);
     IR_SENSOR_ReadMotion(&motion);
+    *status = 0;
     *len = 5;
     data[0] = IR_SENSOR_getInt();
     memcpy(&data[1],  &presence,  sizeof(int16_t));
@@ -46,8 +50,9 @@ void Sensor_IR_Config(uint8_t *cmd_data){
 	IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
 }
 
-void Sensor_Accel_Read(uint8_t *data, uint8_t *len) {
+void Sensor_Accel_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *len = 1;
+    *status = 0;
     data[0] = ACC_getInt();
     ACC_clearInt();
 }
@@ -57,8 +62,13 @@ void Sensor_Accel_Config(uint8_t *cmd_data){
 	ACC_Init();
 }
 
-void Sensor_RTC_Read(uint8_t *data, uint8_t *len) {
+void Sensor_RTC_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 	//data:{YY,MM,DD,HH,MM,SS}}
+	if (!gps_time_synced){
+		*status= 1;
+	}else{
+		*status = 0;
+	}
 
 	RTC_TimeTypeDef rtc_Time = {0};
 	RTC_DateTypeDef rtc_Date = {0};
@@ -75,29 +85,31 @@ void Sensor_RTC_Read(uint8_t *data, uint8_t *len) {
 }
 
 void Sensor_RTC_Config(uint8_t *cmd_data ,uint8_t *status){
-	*status = 1;
-	for (int i=0; i<3 ; i++){
-		if(SyncRTCWithGPS()){
-			*status = 0;
-			break;
-		}
-	}
+	*status = 0;
+	gps_time_sync_request = true ;
 }
 
-void Sensor_Charger_Read(uint8_t *data, uint8_t *len) {
+void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *len = 3;
-    BQ25638_Status_t status;
-    status = BQ25638_GetStatus();
+    *status = 0;
+    BQ25638_Status_t BQ_status;
+    BQ_status = BQ25638_GetStatus();
 
-    data[0] = status.power_source;
-    data[1] = status.battery_soc;
-    data[2] = status.charge_status;
+    data[0] = BQ_status.power_source;
+    data[1] = BQ_status.battery_soc;
+    data[2] = BQ_status.charge_status;
 }
 
-void Sensor_GPS_Read(uint8_t *data, uint8_t *len) {
+void Sensor_GPS_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *len = 12;
 	UBX_NAV_PVT_t nav;
-	UBlox_ReadNavPvt(&nav);
+//	if(UBlox_ReadNavPvt(&nav)){
+		if ( nav.fixType >= 2  ) {
+			*status = 0;
+		}else{
+			*status = 1;
+		}
+//	}
 	memcpy(&data[0],  &nav.lat,  sizeof(nav.lat));
 	memcpy(&data[4],  &nav.lon,  sizeof(nav.lon));
 	memcpy(&data[8],  &nav.hMSL, sizeof(nav.hMSL));
@@ -145,22 +157,22 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         case CMD_SENSOR_READ:
             switch (cmd->sensor_id) {
                 case SENSOR_LED:
-                	Sensor_LED_Read(resp->data, &resp->data_len);
+                	Sensor_LED_Read(resp->data, &resp->data_len, &resp->status);
                 	break;
                 case SENSOR_RTC:
-                	Sensor_RTC_Read(resp->data, &resp->data_len);
+                	Sensor_RTC_Read(resp->data, &resp->data_len, &resp->status);
                 	break;
                 case SENSOR_IR:
-                    Sensor_IR_Read(resp->data, &resp->data_len);
+                    Sensor_IR_Read(resp->data, &resp->data_len, &resp->status);
                     break;
                 case SENSOR_ACCELEROMETER:
-                    Sensor_Accel_Read(resp->data, &resp->data_len);
+                    Sensor_Accel_Read(resp->data, &resp->data_len, &resp->status);
                     break;
                 case SENSOR_GPS:
-                    Sensor_GPS_Read(resp->data, &resp->data_len);
+                    Sensor_GPS_Read(resp->data, &resp->data_len, &resp->status);
                     break;
                 case SENSOR_BATTERY_CHARGER:
-                	Sensor_Charger_Read(resp->data, &resp->data_len);
+                	Sensor_Charger_Read(resp->data, &resp->data_len, &resp->status);
                     break;
                 case INTERRUPTS:
                 	INT_Read(resp->data, &resp->data_len);
@@ -183,6 +195,7 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         			break;
         		case SENSOR_GPS:
         			Sensor_GPS_Config(cmd->data);
+        			break;
                 default:
                     resp->status = 1; // Unknown sensor
                     break;

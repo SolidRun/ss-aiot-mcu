@@ -59,6 +59,7 @@ void SomDisable(void);
 void somSetInt(void);
 uint8_t somGetInt(void);
 void somClearINT(void);
+void resetI2C2(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

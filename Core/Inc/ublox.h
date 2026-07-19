@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 // I2C handle
-extern I2C_HandleTypeDef hi2c1;
+extern I2C_HandleTypeDef hi2c3;
 
 // UBX message class & ID for NAV-PVT
 #define UBX_CLASS_NAV 0x01
@@ -16,7 +16,7 @@ extern I2C_HandleTypeDef hi2c1;
 #define UBX_HEADER_SIZE 6
 #define UBX_CHECKSUM_SIZE 2
 
-#define UBX_TIMEUTC_VALID_MASK  0x04
+#define UBX_TIMEUTC_VALID_MASK  0x03
 
 // UBX NAV-PVT structure (simplified, all values in little-endian)
 typedef struct __attribute__((packed)) {
@@ -71,5 +71,6 @@ typedef struct {
 void UBlox_Init(void);
 bool UBlox_ReadNavPvt(UBX_NAV_PVT_t* nav);
 bool UBlox_GetTimeGPS(UBX_NAV_TIMEGPS_t* timegps);
+bool UBlox_ReadNavSat(uint8_t* numSvs);
 #endif
 

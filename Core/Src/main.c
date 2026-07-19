@@ -36,11 +36,13 @@
 uint8_t IR_INT;
 bool ACC_INT;
 bool MCU_INT;
+bool gps_time_synced = false;      // GPS time was successfully synchronized
+bool gps_time_sync_request = false; // Request to try GPS time synchronization
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define GPS_SYNC_TIMEOUT_MS 60000
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -76,7 +78,6 @@ static void MX_USART3_UART_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 
-
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin == IR_SENS_INT_Pin){
@@ -92,13 +93,31 @@ int SyncRTCWithGPS(){
 	UBX_NAV_PVT_t nav;
 	memset(&nav, 0x00 , sizeof(UBX_NAV_PVT_t));
 	if(UBlox_ReadNavPvt(&nav)){
-		if (nav.valid & UBX_TIMEUTC_VALID_MASK) {
+		if ((nav.valid & UBX_TIMEUTC_VALID_MASK) == UBX_TIMEUTC_VALID_MASK ) {
 			rtc_updeteTime(nav.hour, nav.min , nav.sec);
 			rtc_updeteDate(nav.month, nav.day , nav.year);
 			return 1;
 		}
 	}
 	return 0;
+}
+
+
+void GPS_Time_Init(void)
+{
+    uint32_t start = HAL_GetTick();
+
+    while ((HAL_GetTick() - start) < GPS_SYNC_TIMEOUT_MS)
+    {
+        if (SyncRTCWithGPS())
+        {
+        	gps_time_synced = true;
+            return;
+        }
+        HAL_Delay(2000);
+    }
+
+    gps_time_synced = false;
 }
 
 // Enable VIN_SOM_EN
@@ -182,7 +201,6 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   HAL_Delay(1500);
-  UBlox_Init();
 
   ACC_Init();
 
@@ -190,24 +208,30 @@ int main(void)
   IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
 
   BQ25638_Init();
+
   SomEnable();
   HAL_TIM_Base_Start_IT(&htim6);
-  //BQ25638_Status_t status1;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  //static led_flag=0;
+
+  GPS_Time_Init();
+
+  static uint16_t led_flag=0;
   while (1)
   {
-	 //s= BQ25638_GetStatus();
-	 //SyncRTCWithGPS();
-	 //status1 = BQ25638_GetStatus();
-	 //led_flag++;
-	 //if(led_flag>100){
-		 //HAL_GPIO_TogglePin(LED_MCU_GPIO_Port, LED_MCU_Pin);
-		 //led_flag = 0;
-	 //}
+	 led_flag++;
+	 if(led_flag>100){
+		 HAL_GPIO_TogglePin(LED_MCU_GPIO_Port, LED_MCU_Pin);
+		 led_flag = 0;
+	 }
+
+	 if (gps_time_sync_request){
+		 GPS_Time_Init();
+		 gps_time_sync_request = false;
+	 }
+
 	 HAL_Delay(1);
     /* USER CODE END WHILE */
 
