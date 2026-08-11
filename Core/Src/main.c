@@ -95,7 +95,7 @@ int SyncRTCWithGPS(){
 	if(UBlox_ReadNavPvt(&nav)){
 		if ((nav.valid & UBX_TIMEUTC_VALID_MASK) == UBX_TIMEUTC_VALID_MASK ) {
 			rtc_updeteTime(nav.hour, nav.min , nav.sec);
-			rtc_updeteDate(nav.month, nav.day , nav.year);
+			rtc_updeteDate(nav.month, nav.day , (nav.year-2000) );
 			return 1;
 		}
 	}
