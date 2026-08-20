@@ -53,7 +53,6 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-int SyncRTCWithGPS();
 void SomEnable(void);
 void SomDisable(void);
 void somSetInt(void);

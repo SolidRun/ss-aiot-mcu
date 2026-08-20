@@ -8,69 +8,30 @@
 // I2C handle
 extern I2C_HandleTypeDef hi2c3;
 
-// UBX message class & ID for NAV-PVT
-#define UBX_CLASS_NAV 0x01
-#define UBX_ID_PVT   0x07
+/* ---------------------------------------------------------------------------
+ * DDC stream pump.
+ *
+ * MIA-M10 streams NMEA on the DDC (I2C) port by default. Register 0xFF is the
+ * output stream and the module's register pointer defaults to it, so a plain
+ * read returns stream data; 0xFF is also what comes back when the stream is
+ * empty, and since NMEA is 7-bit ASCII that byte is an unambiguous idle marker.
+ * The 0xFD/0xFE byte-count registers are deliberately not used - see the note
+ * in ublox.c for why reading them here does not work.
+ *
+ * Framing, checksum verification and the sentence queue live in nmea.c.
+ * ------------------------------------------------------------------------- */
 
-// UBX header size
-#define UBX_HEADER_SIZE 6
-#define UBX_CHECKSUM_SIZE 2
-
-#define UBX_TIMEUTC_VALID_MASK  0x03
-
-// UBX NAV-PVT structure (simplified, all values in little-endian)
-typedef struct __attribute__((packed)) {
-    uint32_t iTOW;
-    uint16_t year;
-    uint8_t  month;
-    uint8_t  day;
-    uint8_t  hour;
-    uint8_t  min;
-    uint8_t  sec;
-    uint8_t  valid;
-    uint32_t tAcc;
-    int32_t  nano;
-    uint8_t  fixType;
-    uint8_t  flags;
-    uint8_t  flags2;
-    uint8_t  numSV;
-
-    int32_t  lon;
-    int32_t  lat;
-    int32_t  height;
-    int32_t  hMSL;
-    uint32_t hAcc;
-    uint32_t vAcc;
-
-    int32_t  velN;
-    int32_t  velE;
-    int32_t  velD;
-    int32_t  gSpeed;
-    int32_t  headMot;
-
-    uint32_t sAcc;
-    uint32_t headAcc;
-    uint16_t pDOP;
-    uint16_t flag3;
-    uint32_t reserved0;
-    int32_t  headVeh;
-    int16_t  magDec;
-    uint16_t magAcc;
-
-} UBX_NAV_PVT_t;
-
-typedef struct {
-    uint32_t iTOW;    // ms
-    int32_t fTOW;     // ns fraction
-    int16_t week;     // GPS week
-    uint8_t leapS;    // leap seconds
-    uint8_t valid;    // validity flags
-    uint32_t tAcc;    // accuracy
-} UBX_NAV_TIMEGPS_t;
-// Functions
+/* Discard whatever has accumulated. Call once at start-up. */
 void UBlox_Init(void);
-bool UBlox_ReadNavPvt(UBX_NAV_PVT_t* nav);
-bool UBlox_GetTimeGPS(UBX_NAV_TIMEGPS_t* timegps);
-bool UBlox_ReadNavSat(uint8_t* numSvs);
-#endif
 
+/* Drain the module. Main loop only - it performs blocking I2C3 transfers. */
+void UBlox_Pump(void);
+
+/* Diagnostics, readable from the debugger. */
+extern volatile uint32_t ublox_pump_calls;    /* successful blocks read       */
+extern volatile uint32_t ublox_bytes_total;   /* real NMEA bytes since boot   */
+extern volatile uint32_t ublox_filler_total;  /* 0xFF idle bytes discarded    */
+extern volatile uint16_t ublox_last_real;     /* real bytes in the last pump  */
+extern volatile uint32_t ublox_err_count;     /* failed I2C3 transfers        */
+
+#endif

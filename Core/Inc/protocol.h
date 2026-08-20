@@ -58,9 +58,14 @@ typedef struct {
     uint8_t data[32];   // Response payload
 } I2C_Response_t;
 
+/* Max GPS bytes per read - the response payload size. A full NMEA sentence is
+ * longer than this, so a sentence may span several reads. */
+#define GPS_CHUNK_MAX 32U
+
 /* API
  * Processes a received command and prepares a response.
  */
+
 void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp);
 
 #endif // PROTOCOL_H

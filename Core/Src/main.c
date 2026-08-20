@@ -35,6 +35,7 @@
 #include "bq25638.h"
 #include "rtc.h"
 #include "i2c_slave.h"
+#include "nmea.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,7 +49,7 @@ bool gps_time_sync_request = false; // Request to try GPS time synchronization
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define GPS_SYNC_TIMEOUT_MS 60000
+#define RTC_RESYNC_MS 3600000U   /* re-sync the calendar once an hour */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -77,36 +78,6 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 
 }
 
-int SyncRTCWithGPS(){
-	UBX_NAV_PVT_t nav;
-	memset(&nav, 0x00 , sizeof(UBX_NAV_PVT_t));
-	if(UBlox_ReadNavPvt(&nav)){
-		if ((nav.valid & UBX_TIMEUTC_VALID_MASK) == UBX_TIMEUTC_VALID_MASK ) {
-			rtc_updeteTime(nav.hour, nav.min , nav.sec);
-			rtc_updeteDate(nav.month, nav.day , (nav.year-2000) );
-			return 1;
-		}
-	}
-	return 0;
-}
-
-
-void GPS_Time_Init(void)
-{
-    uint32_t start = HAL_GetTick();
-
-    while ((HAL_GetTick() - start) < GPS_SYNC_TIMEOUT_MS)
-    {
-        if (SyncRTCWithGPS())
-        {
-        	gps_time_synced = true;
-            return;
-        }
-        HAL_Delay(2000);
-    }
-
-    gps_time_synced = false;
-}
 
 // Enable VIN_SOM_EN
 void SomEnable(void) {
@@ -141,12 +112,10 @@ void resetI2C2(void){
 }
 
 
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 
 /* USER CODE END 0 */
 
@@ -199,14 +168,20 @@ int main(void)
 
   SomEnable();
   HAL_TIM_Base_Start_IT(&htim6);
+  UBlox_Init();          /* discard the GNSS backlog */
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-  GPS_Time_Init();
-
   static uint16_t led_flag=0;
+  static uint32_t last_pump = 0;
+  static uint32_t last_sync = 0;
+
+  /* A reset does not invalidate the calendar. Believe the backup domain rather
+   * than the RAM flag, so the SOM is not told the time is unverified when the
+   * cell has been keeping it right all along. */
+  gps_time_synced = rtc_gpsSyncIsValid();
   while (1)
   {
 	 led_flag++;
@@ -215,8 +190,34 @@ int main(void)
 		 led_flag = 0;
 	 }
 
+	 /* Drain the GNSS on a fixed cadence. Measured output is ~370 B/s with no
+	  * fix and two to three times that with one, so a 20 ms gap accumulates a
+	  * few dozen bytes at most and the module's buffer never builds up. */
+	 if ((HAL_GetTick() - last_pump) >= 20U) {
+		 last_pump = HAL_GetTick();
+		 UBlox_Pump();
+	 }
+	 ////////////////////////
+	 /* Keep the calendar right from GNSS, with no help from the SOM. RMC gives
+	  * a fresh time every second once there is a fix; the RTC only needs it
+	  * once, and then once an hour to stay inside the LSE's 20 ppm. */
+	 {
+		 nmea_time_t t;
+		 if ((!gps_time_synced ||
+		      (HAL_GetTick() - last_sync) >= RTC_RESYNC_MS) &&
+		     NMEA_GetTime(&t)) {
+			 rtc_updeteTime(t.hour, t.min, t.sec);
+			 rtc_updeteDate(t.month, t.day, t.year);
+			 rtc_markGpsSynced();
+			 gps_time_synced = true;
+			 last_sync = HAL_GetTick();
+		 }
+	 }
+
+	 /* The SOM's "sync now" command just clears the flag; the block above does
+	  * the work on the next RMC. */
 	 if (gps_time_sync_request){
-		 GPS_Time_Init();
+		 gps_time_synced = false;
 		 gps_time_sync_request = false;
 	 }
 

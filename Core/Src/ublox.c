@@ -1,106 +1,116 @@
 #include "ublox.h"
+#include "nmea.h"
 #include <string.h>
 
 #define UBLOX_ADDR (0x42 << 1)
 
+/* ===========================================================================
+ * DDC stream pump
+ * ---------------------------------------------------------------------------
+ * Additive: nothing above is touched. Once the NMEA path is proven the UBX
+ * polling functions, their poll messages and the NAV structs can be removed.
+ *
+ * No use is made of the 0xFD/0xFE byte-count registers. Reading them needs the
+ * register-address write and the data read to be joined by a repeated start;
+ * doing it as a separate Transmit() and Receive() puts a STOP in between, the
+ * module resets its register pointer, and the two bytes that come back are
+ * stream filler rather than a count. That was measured: the count read as 0xFF
+ * and the pump then "drained" filler at roughly twenty times the real rate.
+ *
+ * Instead this reads a fixed block straight from the stream (the register
+ * pointer defaults to 0xFF) and discards 0xFF bytes. NMEA is 7-bit ASCII, so
+ * 0xFF can never be real data - it is an unambiguous idle marker, and the whole
+ * question of pointer semantics goes away.
+ *
+ * I2C3 carries nothing but the GNSS, so always transferring a full block costs
+ * nothing that matters: 64 bytes at 100 kHz is about 6 ms, and at a 20 ms
+ * cadence that is a third of an otherwise idle bus, with a 3200 B/s ceiling
+ * against roughly 600 B/s of real output.
+ * ========================================================================= */
 
-// Poll NAV-PVT command
-static uint8_t UBX_NAV_PVT_POLL[8] = {
-    0xB5, 0x62,             // Sync chars
-    0x01, 0x07,             // Class=0x01 (NAV), ID=0x07 (PVT)
-    0x00, 0x00,             // Length = 0
-    0x08, 0x19              // CK_A, CK_B
-};
+#define UBLOX_CHUNK         64U     /* bytes per I2C3 read              */
+#define UBLOX_I2C_TIMEOUT   20U     /* ms - short, never HAL_MAX_DELAY   */
+#define UBLOX_FLUSH_GUARD   512U    /* bound the start-up flush loop     */
+#define UBLOX_FILLER        0xFFU   /* module idle byte                  */
 
-// Poll TIMEUTC
-static uint8_t UBX_NAV_TIMEUTC_POLL[] = {
-    0xB5, 0x62,       // Sync chars
-    0x01, 0x21,       // Class=0x01 (NAV), ID=0x21 (TIMEUTC)
-    0x00, 0x00,       // Length = 0
-    0x22, 0x67        // CK_A, CK_B (checksum)
-};
+/* Diagnostics. Only meaningful together: pump_calls counts blocks that were
+ * actually read, so at any moment
+ *
+ *     ublox_pump_calls * UBLOX_CHUNK == ublox_bytes_total + ublox_filler_total
+ *
+ * exactly. If that stops holding, bytes are being lost somewhere between the
+ * I2C read and the classification loop. The start-up flush in UBlox_Init()
+ * deliberately stays out of these counters. */
+volatile uint32_t ublox_pump_calls;    /* successful blocks read       */
+volatile uint32_t ublox_bytes_total;   /* real NMEA bytes since boot   */
+volatile uint32_t ublox_filler_total;  /* 0xFF idle bytes discarded    */
+volatile uint16_t ublox_last_real;     /* real bytes in the last pump  */
+volatile uint32_t ublox_err_count;     /* failed I2C3 transfers        */
 
-
-
-static void UBX_Send(uint8_t *msg, uint16_t len) {
-    HAL_I2C_Master_Transmit(&hi2c3, UBLOX_ADDR, msg, len, 100);
-}
-
-// Simple UBX checksum calculation
-static void UBX_CalcChecksum(uint8_t* msg, uint8_t len, uint8_t* ck_a, uint8_t* ck_b)
+/* Read one block of stream. Returns false on I2C error. */
+static bool UBlox_ReadBlock(uint8_t *buf)
 {
-    *ck_a = 0;
-    *ck_b = 0;
-    for(uint8_t i = 2; i < len; i++)
-    {
-        *ck_a += msg[i];
-        *ck_b += *ck_a;
+    if (HAL_I2C_Master_Receive(&hi2c3, UBLOX_ADDR, buf, UBLOX_CHUNK,
+                               UBLOX_I2C_TIMEOUT) != HAL_OK) {
+        ublox_err_count++;
+        return false;
     }
-}
-
-
-
-// Read NAV-PVT message (blocking)
-bool UBlox_ReadNavPvt(UBX_NAV_PVT_t* nav)
-{
-    uint8_t header[UBX_HEADER_SIZE];
-    uint8_t payload[92]; // NAV-PVT payload length
-    uint8_t checksum[UBX_CHECKSUM_SIZE];
-
-    // Send poll request
-    if(HAL_I2C_Master_Transmit(&hi2c3, 0x42<<1, UBX_NAV_PVT_POLL, sizeof(UBX_NAV_PVT_POLL), HAL_MAX_DELAY) != HAL_OK)
-        return false;
-
-    HAL_Delay(1500);
-
-    // Read header
-    if(HAL_I2C_Master_Receive(&hi2c3, 0x42<<1, header , UBX_HEADER_SIZE , 0xFF) != HAL_OK)
-        return false;
-
-    uint16_t length = header[4] | (header[5] << 8);
-    if(length != 92) return false;
-
-    // Read payload
-    if(HAL_I2C_Master_Receive(&hi2c3, 0x42<<1, payload, length, 0xFF) != HAL_OK)
-        return false;
-
-    // Read checksum
-    if(HAL_I2C_Master_Receive(&hi2c3, 0x42<<1, checksum, UBX_CHECKSUM_SIZE, 100) != HAL_OK)
-        return false;
-
-    // Copy payload to struct (little-endian)
-    memcpy(nav, payload, sizeof(UBX_NAV_PVT_t));
-
     return true;
 }
 
-bool UBlox_GetTimeGPS(UBX_NAV_TIMEGPS_t* timegps) {
-    // 1. Send Poll request
-    if (HAL_I2C_Master_Transmit(&hi2c3, UBLOX_ADDR, (uint8_t*)UBX_NAV_TIMEUTC_POLL,
-                                sizeof(UBX_NAV_TIMEUTC_POLL), HAL_MAX_DELAY) != HAL_OK)
-        return false;
+void UBlox_Init(void)
+{
+    uint8_t  scratch[UBLOX_CHUNK];
+    uint16_t guard;
 
-    // 2. Read 2-byte length prefix
-    uint8_t len_bytes[2];
-    if (HAL_I2C_Master_Receive(&hi2c3, UBLOX_ADDR, len_bytes, 2, 100) != HAL_OK)
-        return false;
-    uint16_t msg_len = len_bytes[0] | (len_bytes[1] << 8);
+    ublox_pump_calls   = 0;
+    ublox_bytes_total  = 0;
+    ublox_filler_total = 0;
+    ublox_last_real    = 0;
+    ublox_err_count    = 0;
 
-    if (msg_len < 8 + 20 + 2)  // header (6) + payload (20) + checksum (2)
-        return false;
+    NMEA_Reset();
 
-    // 3. Read the UBX message
-    uint8_t buffer[32]; // 6+20+2 = 28 bytes total
-    if (HAL_I2C_Master_Receive(&hi2c3, UBLOX_ADDR, buffer, 30, 100) != HAL_OK)
-        return false;
+    /* Drain until a whole block comes back as filler, i.e. the module is empty.
+     * Measured 9287 bytes of backlog on a board nothing had ever drained. */
+    for (guard = 0; guard < UBLOX_FLUSH_GUARD; guard++) {
+        uint16_t i;
+        uint16_t nonfiller = 0;
 
-    // 4. Verify sync, class, id
-    if (buffer[0] != 0xB5 || buffer[1] != 0x62) return false;
-    if (buffer[2] != 0x01 || buffer[3] != 0x21) return false;
+        if (!UBlox_ReadBlock(scratch)) {
+            return;
+        }
+        for (i = 0; i < UBLOX_CHUNK; i++) {
+            if (scratch[i] != UBLOX_FILLER) {
+                nonfiller++;
+            }
+        }
+        if (nonfiller == 0U) {
+            return;                 /* empty */
+        }
+    }
+}
 
-    // 5. Copy payload into struct
-    //memcpy(timeutc, &buffer[6], sizeof(UBX_NAV_TIMEUTC_t));
-    if (msg_len <50) return true;
+void UBlox_Pump(void)
+{
+    uint8_t  chunk[UBLOX_CHUNK];
+    uint16_t i;
+    uint16_t real = 0;
 
-    return false;
+    if (!UBlox_ReadBlock(chunk)) {
+        return;
+    }
+    ublox_pump_calls++;
+
+    for (i = 0; i < UBLOX_CHUNK; i++) {
+        if (chunk[i] == UBLOX_FILLER) {
+            ublox_filler_total++;
+            continue;
+        }
+        real++;
+        NMEA_Feed(chunk[i]);
+    }
+
+    ublox_last_real    = real;
+    ublox_bytes_total += real;
 }

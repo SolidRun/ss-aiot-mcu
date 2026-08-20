@@ -7,6 +7,7 @@
 
 #include "protocol.h"
 #include "stm32u0xx_hal.h"
+#include "nmea.h"
 #include <string.h>
 
 extern uint8_t acc_ths;
@@ -100,18 +101,33 @@ void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 }
 
 void Sensor_GPS_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
-    *len = 12;
-	UBX_NAV_PVT_t nav;
-//	if(UBlox_ReadNavPvt(&nav)){
-		if ( nav.fixType >= 2  ) {
-			*status = 0;
-		}else{
-			*status = 1;
-		}
-//	}
-	memcpy(&data[0],  &nav.lat,  sizeof(nav.lat));
-	memcpy(&data[4],  &nav.lon,  sizeof(nav.lon));
-	memcpy(&data[8],  &nav.hMSL, sizeof(nav.hMSL));
+    uint8_t n = 0;
+
+    /* Fill the whole payload from as many queued sentences as fit. The response
+     * length has to be constant. The master cannot learn DATA_LEN before it
+     * reads, and reading past the armed length leaves the slave stretching SCL
+     * with nothing left to send - the bus hangs until the stuck-bus watchdog
+     * fires seconds later. So the length is fixed and the master always reads
+     * 2 + GPS_CHUNK_MAX. */
+    while (n < GPS_CHUNK_MAX) {
+        uint8_t got = NMEA_Pop(&data[n], (uint8_t)(GPS_CHUNK_MAX - n));
+        if (got == 0U) {
+            break;              /* queue drained */
+        }
+        n += got;
+    }
+
+    /* An empty queue is reported in STATUS, not in the length. */
+    *status = (n > 0U) ? 0U : 1U;
+
+    /* Pad with newlines - empty lines, which any NMEA framer discards. Padding
+     * can only ever follow a complete sentence: NMEA_Pop returns a partial one
+     * only when it filled the payload, and then there is nothing left to pad. */
+    while (n < GPS_CHUNK_MAX) {
+        data[n++] = (uint8_t)'\n';
+    }
+
+    *len = GPS_CHUNK_MAX;
 }
 
 void Sensor_GPS_Config(uint8_t *cmd_data){
