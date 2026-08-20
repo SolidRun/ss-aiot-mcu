@@ -9,7 +9,6 @@
 #include "stm32u0xx_hal.h"
 #include <string.h>
 
-extern uint8_t ir_ths;
 extern uint8_t acc_ths;
 extern bool gps_time_synced;
 extern bool gps_time_sync_request;
@@ -45,7 +44,7 @@ void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 }
 
 void Sensor_IR_Config(uint8_t *cmd_data){
-	ir_ths = cmd_data[0]<<8 | cmd_data[1] ;
+	ir_ths = (uint16_t)(((uint16_t)cmd_data[0] << 8) | cmd_data[1]);
 	IR_SENSOR_InitCtx();
 	IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
 }

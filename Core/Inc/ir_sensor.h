@@ -12,6 +12,8 @@ typedef struct {
     uint8_t not_used : 4;
 } sths34pf80_interrupt_flags_t;
 
+extern uint16_t ir_ths;
+
 void IR_SENSOR_InitCtx();
 int IR_SENSOR_CheckConnection(void);
 void IR_SENSOR_StartContinuous(sths34pf80_odr_t odr);

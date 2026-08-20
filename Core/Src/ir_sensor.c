@@ -15,7 +15,7 @@ extern I2C_HandleTypeDef hi2c1;  // CubeMX I2C handle
 // Private variables
 //------------------------------------------------------------------------------
 static stmdev_ctx_t ir_sensor_ctx;
-#define IR_THS_DEFAULT  1000;
+#define IR_THS_DEFAULT  1000U
 uint16_t ir_ths = IR_THS_DEFAULT;
 
 //------------------------------------------------------------------------------
