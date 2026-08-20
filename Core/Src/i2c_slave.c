@@ -14,6 +14,7 @@ extern I2C_HandleTypeDef hi2c2;
 
 static I2C_Command_t rxCommand;
 static I2C_Response_t txResponse;
+#define I2C_MAX_PAYLOAD  (sizeof(rxCommand.data))
 
 static uint8_t rxBuffer[sizeof(I2C_Command_t)];
 static uint8_t txBuffer[sizeof(I2C_Response_t)];
@@ -35,14 +36,17 @@ uint8_t expected_bytes = 3;
  * never ends. The bus is then stuck (SCL held low) until something
  * forces the I2C2 peripheral itself to reset.
  *
- * HAL_I2C_DeInit()/Init() alone is NOT enough — it only resets the
- * driver-level struct, not the peripheral's internal state machine.
- * __HAL_RCC_I2C2_FORCE_RESET()/RELEASE_RESET() resets the peripheral at
- * the clock-domain level, which does clear the stuck state.
+ * resetI2C2() recovers it with HAL_I2C_DeInit() followed by
+ * MX_I2C2_Init(). Both clear the PE bit in CR1, and for this I2C IP
+ * clearing PE is the documented software reset: it returns the internal
+ * state machine and status bits to their reset values and releases SCL
+ * and SDA. __HAL_RCC_I2C2_FORCE_RESET() is not required.
  *
- * This is detected by polling the HAL I2C state from the main loop: if
- * we remain in a "busy" state for longer than any real I2C2 transaction
- * should ever take, we assume the bus is stuck and force a recovery.
+ * This is detected by polling the HAL I2C state from the TIM6 interrupt
+ * handler, which fires at 1 Hz: if we remain in a "busy" state for more
+ * ticks than any real I2C2 transaction should need, we assume the bus is
+ * stuck and force a recovery. Because the tick is 1 Hz, the timeout is
+ * effectively counted in seconds, not milliseconds.
  * ----------------------------------------------------------------------*/
 
 #define I2C2_STUCK_TIMEOUT_MS 10U
@@ -51,7 +55,7 @@ static uint32_t i2c2_state_entered_flag = 0;
 static uint32_t i2c2_counter_tick = 0;
 static HAL_I2C_StateTypeDef i2c2_last_state = HAL_I2C_STATE_RESET;
 
-/* Call this regularly from the main while(1) loop.
+/* Called from the TIM6 interrupt handler (1 Hz).
  * Detects an I2C2 peripheral stuck in a busy state for too long
  * (e.g. master died mid-transaction) and forces a recovery. */
 void I2C2_CheckStuckBus(void) {
@@ -121,7 +125,9 @@ void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, ui
         else
         {
             // Master requests data from slave
-            HAL_I2C_Slave_Seq_Transmit_IT(hi2c, txBuffer, 2 + txDataLen, I2C_LAST_FRAME);
+            uint16_t n = (uint16_t)(2 + txDataLen);
+            if (n > sizeof(txBuffer)) n = sizeof(txBuffer);
+            HAL_I2C_Slave_Seq_Transmit_IT(hi2c, txBuffer, n, I2C_LAST_FRAME);
         }
     }
 }
@@ -135,6 +141,15 @@ void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef *hi2c) {
         // First, check if we just received the header (first 3 bytes)
         if (rxcount == 3) {
             uint8_t data_len = rxBuffer[2]; // Header's data_len
+            if (data_len > I2C_MAX_PAYLOAD) {
+                txResponse.status   = 1;
+                txResponse.data_len = 0;
+                memcpy(txBuffer, &txResponse, 2);
+                txDataLen      = 0;
+                rxcount        = 0;
+                expected_bytes = 3;
+                return;
+            }
             if (data_len > 0) {
                 expected_bytes = data_len;
                 HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxBuffer + rxcount, expected_bytes, I2C_LAST_FRAME);
