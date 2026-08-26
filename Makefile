@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Kbuild Makefile for SolidRun SolidSense AIOT System Controller Driver
+#
+# Copyright (C) 2026 Josua Mayer <josua@solid-run.com>
+#
+
+obj-m += ssaiot-sc.o
+ssaiot-sc-y := core.o irq.o mfd.o transport.o
+
+KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
+PWD := $(CURDIR)
+
+all modules:
+	$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules
+
+modules_install:
+	$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules_install
+
+clean:
+	$(MAKE) -C $(KERNEL_SRC) M=$(PWD) clean
