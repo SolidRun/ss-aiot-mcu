@@ -49,14 +49,12 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPS_RSTN_Pin|BATT_QON_Pin, GPIO_PIN_SET);
 
-  /*Configure GPIO pin Output Level */
+  /*Configure GPIO pin Output Level Low */
+  HAL_GPIO_WritePin(GPIOA, LED_MCU_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GPIOB, BATT_CE_Pin|SOM_EN_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GNSS_PWR_EN_GPIO_Port, GNSS_PWR_EN_Pin, GPIO_PIN_SET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED_MCU_Pin|MCU_INT_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pin Output Level High */
+  HAL_GPIO_WritePin(GPIOA, GNSS_PWR_EN_Pin|MCU_INT_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pins : IR_SENS_INT_Pin _6AX_INT_Pin */
   GPIO_InitStruct.Pin = IR_SENS_INT_Pin|_6AX_INT_Pin;
@@ -83,12 +81,19 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(BATT_INT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : GNSS_PWR_EN_Pin LED_MCU_Pin MCU_INT_Pin */
-  GPIO_InitStruct.Pin = GNSS_PWR_EN_Pin|LED_MCU_Pin|MCU_INT_Pin;
+  /*Configure GPIO pins : GNSS_PWR_EN_Pin LED_MCU_Pin */
+  GPIO_InitStruct.Pin = GNSS_PWR_EN_Pin|LED_MCU_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : MCU_INT_Pin */
+  GPIO_InitStruct.Pin = MCU_INT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(MCU_INT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : BATT_PG_Pin */
   GPIO_InitStruct.Pin = BATT_PG_Pin;

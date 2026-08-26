@@ -92,7 +92,8 @@ void SomDisable(void) {
 }
 
 void somSetInt(void) {
-	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
+	/* assert: drive the line low */
+	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_RESET);
 	MCU_INT = 1;
 }
 
@@ -102,7 +103,8 @@ uint8_t somGetInt(void) {
 
 void somClearINT(void) {
 	MCU_INT = 0;
-	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_RESET);
+	/* deassert: release the line back to external pull-up */
+	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
 }
 
 void resetI2C2(void){

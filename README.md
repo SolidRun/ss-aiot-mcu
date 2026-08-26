@@ -73,6 +73,40 @@ From Linux on the SOM, the MCU should appear at `0x18`:
 i2cdetect -y -r <bus>
 ```
 
+#### Interrupt line
+
+Besides I2C the MCU drives one interrupt line towards the SOM, `MCU_INT` (`PA15`).
+
+| Property | Value |
+|----------|-------|
+| Drive | **Open drain**, `GPIO_MODE_OUTPUT_OD` |
+| Polarity | **Active low** — pulled low to signal, released to deassert |
+| Idle level | Held high by a **pull-up on the SOM**, which the master must enable |
+
+The master must therefore configure the line as level triggered, active low. Under
+Linux that is `IRQ_TYPE_LEVEL_LOW` in the device tree.
+
+The line is asserted by the IR and accelerometer paths and is released by the
+`Read MCU/IR/ACC interrupts` command, which clears all three sources. It stays
+asserted until that command is issued, so a master that never reads the interrupt
+status will see the line held low indefinitely.
+
+#### Why open drain, and why active low
+
+**Open drain, because the SOM's I/O voltage is not ours to choose.** The line
+crosses into the SOM's domain, which is 1.8 V on some modules and 3.3 V on others.
+Open drain means the MCU only ever pulls the line down and never sources into it,
+so the high level is set by the SOM's own pull-up at the SOM's own rail. Driving
+the line push-pull from the MCU's supply would put that supply on the CPU input
+and can damage a 1.8 V one.
+
+**Active low, because the MCU's pin starts high impedance.** `PA15` has no
+alternate function on this part — it is not a debug pin, so it comes out of reset
+as a floating input and stays that way until `MX_GPIO_Init()` runs. Against the
+SOM's pull-up that window reads as deasserted. Were the line active high, the same
+window would look like an interrupt, and the SOM would see a spurious one on every
+MCU reset.
+
 #### Transaction sequence
 
 A command is one **write** transaction followed by a separate **read** transaction:
