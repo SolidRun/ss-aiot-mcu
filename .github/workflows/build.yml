@@ -1,0 +1,77 @@
+name: build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    name: STM32U031C8Ux firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      TARGET: AIOT
+      LDSCRIPT: STM32U031C8UX_FLASH.ld
+      # Mirrors the STM32CubeIDE "Release" configuration (.cproject), except
+      # that debug info is kept so the archived .elf stays debuggable. Debug
+      # info lives outside the loadable sections, so the .hex/.bin are
+      # unaffected by it.
+      MCUFLAGS: -mcpu=cortex-m0plus -mthumb -mfloat-abi=soft
+      DEFINES: -DUSE_HAL_DRIVER -DSTM32U031xx
+      INCLUDES: >-
+        -ICore/Inc
+        -IDrivers/STM32U0xx_HAL_Driver/Inc
+        -IDrivers/STM32U0xx_HAL_Driver/Inc/Legacy
+        -IDrivers/CMSIS/Device/ST/STM32U0xx/Include
+        -IDrivers/CMSIS/Include
+      CFLAGS: -std=gnu11 -Os -g3 -Wall -ffunction-sections -fdata-sections
+      LDFLAGS: >-
+        --specs=nano.specs --specs=nosys.specs -static
+        -Wl,--gc-sections -Wl,--print-memory-usage
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # ubuntu-latest (24.04) ships Arm GNU Toolchain 13.2.Rel1, i.e. the same
+      # upstream release STM32CubeIDE bundles. libnewlib provides nano.specs /
+      # nosys.specs.
+      - name: Install arm-none-eabi toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi
+          arm-none-eabi-gcc --version
+
+      # Core/ and Drivers/ are the two source folders the IDE builds
+      # (<sourceEntries> in .cproject), so globbing them keeps CI in sync with
+      # CubeMX code generation without a hand-maintained file list.
+      - name: Compile and link
+        run: |
+          mkdir -p build
+          arm-none-eabi-gcc \
+            $MCUFLAGS $CFLAGS $DEFINES $INCLUDES $LDFLAGS \
+            -T "$LDSCRIPT" -Wl,-Map=build/$TARGET.map \
+            -x assembler-with-cpp Core/Startup/*.s -x none \
+            $(find Core/Src Drivers -name '*.c' | sort) \
+            -lc -lm -o "build/$TARGET.elf"
+
+      - name: Generate hex and bin
+        run: |
+          arm-none-eabi-objcopy -O ihex   "build/$TARGET.elf" "build/$TARGET.hex"
+          arm-none-eabi-objcopy -O binary "build/$TARGET.elf" "build/$TARGET.bin"
+          arm-none-eabi-size "build/$TARGET.elf"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TARGET }}-firmware
+          path: |
+            build/*.elf
+            build/*.hex
+            build/*.bin
+            build/*.map
+          if-no-files-found: error
