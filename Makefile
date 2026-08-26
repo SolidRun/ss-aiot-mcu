@@ -8,6 +8,9 @@
 obj-m += ssaiot-sc.o
 ssaiot-sc-y := core.o irq.o mfd.o transport.o
 
+obj-m += ssaiot-sc-gnss.o
+ssaiot-sc-gnss-y := gnss.o
+
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 PWD := $(CURDIR)
 
