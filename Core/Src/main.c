@@ -40,6 +40,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+extern volatile bool sensors_ready;
 uint8_t IR_INT;
 bool ACC_INT;
 bool MCU_INT;
@@ -69,6 +70,8 @@ void SystemClock_Config(void);
 
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 {
+	if (!sensors_ready) { return; }
+
     if (GPIO_Pin == IR_SENS_INT_Pin){
     	IR_HandleInt();
     }
