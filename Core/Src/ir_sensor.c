@@ -152,48 +152,63 @@ int IR_SENSOR_DRDY_Status(uint8_t *status)
     return 0;
 }
 
+/**
+ * @brief Read the interrupt flags the sensor is currently asserting.
+ * @retval >=0  bitmask of routed FUNC_STATUS bits (0 = nothing pending)
+ * @retval  -1  the read failed - the sensor state is unknown
+ *
+ * Returns a mask rather than a single value: presence and motion can be set
+ * together, and the SOM demultiplexes them by bit.
+ */
 int CheckInterruptFlags()
 {
 	uint8_t func_status;
-	int32_t ret = sths34pf80_read_reg(&ir_sensor_ctx, STHS34PF80_FUNC_STATUS, &func_status, 1);
-	if (ret == 0) {
-	    if (func_status & 0x04) {
-	        // Presence detected
-	    	return 4;
-	    }
-	    if (func_status & 0x02) {
-	        // Motion detected
-	    	return 2;
-	    }
-	    //if (func_status & 0x01) {
-        // Thermal shock detected
-    	//return 1;
-	    //}
-	    else{
-	    	return 0;
-	    }
+    static const uint8_t mask = 0x02U | 0x04U; // motion, presence
+
+	if (sths34pf80_read_reg(&ir_sensor_ctx, STHS34PF80_FUNC_STATUS,
+	                        &func_status, 1) != 0) {
+		return -1;
 	}
-	return 0;
+
+	return (int)(func_status & mask);
 }
 
+/* get previously stored interrupt */
 int IR_SENSOR_getInt()
 {
-	IR_INT = CheckInterruptFlags();
 	return IR_INT;
 }
 
+/* clear previously stored interrupt */
 void IR_SENSOR_clearInt()
 {
 	IR_INT = 0;
 }
 
+/**
+ * @brief Sample the sensor and notify the SOM if anything is pending.
+ *
+ * Called from the EXTI handler, and once directly after
+ * GPIO_EnableSensorInterrupts() - the INT pin is push-pull and level-driven,
+ * so a condition already asserted when the line comes up produces no rising
+ * edge at all and would otherwise never be reported.
+ *
+ * Stores interrupt reason for later use.
+ */
 void IR_HandleInt()
 {
-	IR_INT = IR_SENSOR_getInt();
-	SomEnable();
-	somSetInt();
+	int flags = CheckInterruptFlags();
+
+    /* abort on error */
+	if (flags < 0)
+		return;
+
+    /* accumulate interrupts */
+	IR_INT |= (uint8_t)flags;
+
+    /* report any interrupts to som */
+    if (IR_INT) {
+	    SomEnable();
+	    somSetInt();
+    }
 }
-
-
-
-
