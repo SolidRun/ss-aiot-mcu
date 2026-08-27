@@ -103,9 +103,18 @@ void ACC_clearInt()
 	ACC_INT = 0;
 }
 
+/**
+ * @brief Sample the wake-up source and notify the SOM if it fired.
+ *
+ * Called from the EXTI handler, and once directly after
+ * GPIO_EnableSensorInterrupts() - the wake-up is latched in the device, so
+ * one that fired before the line came up produces no further edge.
+ */
 void ACC_HandleInt()
 {
-    ACC_INT = ACC_CheckWakeUp();
-	SomEnable();
-	somSetInt();
+	ACC_INT = ACC_CheckWakeUp();
+	if (ACC_INT) {
+		SomEnable();
+		somSetInt();
+	}
 }
