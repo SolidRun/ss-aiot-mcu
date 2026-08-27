@@ -37,11 +37,9 @@ void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     IR_SENSOR_ReadPresence(&presence);
     IR_SENSOR_ReadMotion(&motion);
     *status = 0;
-    *len = 5;
-    data[0] = IR_SENSOR_getInt();
-    memcpy(&data[1],  &presence,  sizeof(int16_t));
-    memcpy(&data[3],  &motion,  sizeof(int16_t));
-    IR_SENSOR_clearInt();
+    *len = 4;
+    memcpy(&data[0],  &presence,  sizeof(int16_t));
+    memcpy(&data[2],  &motion,  sizeof(int16_t));
 }
 
 void Sensor_IR_Config(uint8_t *cmd_data){
@@ -54,7 +52,6 @@ void Sensor_Accel_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *len = 1;
     *status = 0;
     data[0] = ACC_getInt();
-    ACC_clearInt();
 }
 
 void Sensor_Accel_Config(uint8_t *cmd_data){
