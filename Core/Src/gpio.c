@@ -49,12 +49,14 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPS_RSTN_Pin|BATT_QON_Pin, GPIO_PIN_SET);
 
-  /*Configure GPIO pin Output Level Low */
-  HAL_GPIO_WritePin(GPIOA, LED_MCU_Pin, GPIO_PIN_RESET);
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, BATT_CE_Pin|SOM_EN_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level High */
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GNSS_PWR_EN_Pin|MCU_INT_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LED_MCU_GPIO_Port, LED_MCU_Pin, GPIO_PIN_RESET);
 
   /* IR_SENS_INT_Pin and _6AX_INT_Pin are deliberately NOT configured here.
    * They are left in their reset state until GPIO_EnableSensorInterrupts()
