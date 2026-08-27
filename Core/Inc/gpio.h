@@ -39,6 +39,7 @@ extern "C" {
 void MX_GPIO_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+void GPIO_EnableSensorInterrupts(void);
 
 /* USER CODE END Prototypes */
 

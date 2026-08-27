@@ -168,6 +168,11 @@ int main(void)
 
   BQ25638_Init();
 
+  /* Both sensor drivers are up, so it is now safe to bring up the interrupt
+   * lines they share. Doing this here rather than in MX_GPIO_Init() is what
+   * keeps an edge from reaching a driver that has no bus IO registered yet. */
+  GPIO_EnableSensorInterrupts();
+
   SomEnable();
   HAL_TIM_Base_Start_IT(&htim6);
   UBlox_Init();          /* discard the GNSS backlog */

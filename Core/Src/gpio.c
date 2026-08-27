@@ -56,11 +56,9 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level High */
   HAL_GPIO_WritePin(GPIOA, GNSS_PWR_EN_Pin|MCU_INT_Pin, GPIO_PIN_SET);
 
-  /*Configure GPIO pins : IR_SENS_INT_Pin _6AX_INT_Pin */
-  GPIO_InitStruct.Pin = IR_SENS_INT_Pin|_6AX_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  /* IR_SENS_INT_Pin and _6AX_INT_Pin are deliberately NOT configured here.
+   * They are left in their reset state until GPIO_EnableSensorInterrupts()
+   * is called, once the sensor drivers are up - see below. */
 
   /*Configure GPIO pins : GNSS_GPS1PPS_Pin GPS_INT_Pin BATT_STAT_Pin */
   GPIO_InitStruct.Pin = GNSS_GPS1PPS_Pin|GPS_INT_Pin|BATT_STAT_Pin;
@@ -102,14 +100,50 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(BATT_PG_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
-
+  /* EXTI0_1 belongs to the sensor lines and is set up together with them in
+   * GPIO_EnableSensorInterrupts(), not here. */
   HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
 }
 
 /* USER CODE BEGIN 2 */
+
+/**
+  * @brief  Configure and enable the sensor interrupt lines, PA0 (IR_SENS_INT)
+  *         and PA1 (_6AX_INT).
+  *
+  * Kept out of MX_GPIO_Init() on purpose. Both pins share the EXTI0_1 vector,
+  * and an edge arriving before the corresponding driver has registered its
+  * bus IO used to call through a NULL function pointer and HardFault the MCU.
+  * The sensors keep their configuration across an MCU reset, so a device
+  * already asserting INT hits that window on every boot.
+  *
+  * Call once ACC_Init() and IR_SENSOR_InitCtx() have completed. Until then the
+  * pins stay in their reset state (analog, input buffer off) and the EXTI mux,
+  * trigger and mask registers are all still at their reset values, so no edge
+  * can be detected, latched or delivered.
+  */
+void GPIO_EnableSensorInterrupts(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* Sets the EXTI mux (EXTICR), the rising trigger (RTSR1) and unmasks the
+   * lines (IMR1) for both pins in one go. */
+  GPIO_InitStruct.Pin = IR_SENS_INT_Pin|_6AX_INT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
+
+  /* Both sensors drive their INT pin as a level and latch the source until it
+   * is read, so a condition asserted before the lines came up produces no
+   * rising edge and would never be reported. Raise one in software: SWIER1
+   * sets the rising-pending bit, so each sensor is sampled by its normal
+   * handler, in interrupt context, exactly as a real edge would. */
+  __HAL_GPIO_EXTI_GENERATE_SWIT(IR_SENS_INT_Pin|_6AX_INT_Pin);
+}
 
 /* USER CODE END 2 */
