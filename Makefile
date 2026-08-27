@@ -5,8 +5,8 @@
 # Copyright (C) 2026 Josua Mayer <josua@solid-run.com>
 #
 
-obj-m += ssaiot-sc.o
-ssaiot-sc-y := core.o irq.o mfd.o transport.o
+obj-m += ssaiot-sc-mfd.o
+ssaiot-sc-mfd-y := core.o irq.o mfd.o transport.o
 
 obj-m += ssaiot-sc-gnss.o
 ssaiot-sc-gnss-y := gnss.o
