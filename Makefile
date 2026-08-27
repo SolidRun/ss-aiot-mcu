@@ -11,6 +11,9 @@ ssaiot-sc-mfd-y := core.o irq.o mfd.o transport.o
 obj-m += ssaiot-sc-gnss.o
 ssaiot-sc-gnss-y := gnss.o
 
+obj-m += ssaiot-sc-rtc.o
+ssaiot-sc-rtc-y := rtc.o
+
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 PWD := $(CURDIR)
 
