@@ -98,9 +98,10 @@ followed by one detail byte per source that has one.
 
 | Byte | Contents |
 |------|----------|
-| `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer. `0x08` RTC and `0x10` charger are allocated and are never set yet. |
+| `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer, `0x08` RTC. `0x10` charger is allocated and is never set yet. |
 | `data[1]` | **IR detail** — masked `FUNC_STATUS`: `0x02` motion, `0x04` presence. `0x01` thermal shock is routed off the pin and masked in firmware. |
 | `data[2]` | **Accelerometer detail** — `WAKE_UP_SRC` as the device reports it: `0x01` Z, `0x02` Y, `0x04` X, `0x08` the wake-up flag, `0x20` free-fall, `0x40` sleep change. |
+| `data[3]` | **RTC detail** — `0x01` alarm A fired. Alarm B, the wakeup timer and tamper are not used and have no bit yet. |
 
 A source occupies its bit whether or not it has a detail byte. `0x01` is raised
 once during init, so the first read after a reset reports it — every threshold the
@@ -209,7 +210,10 @@ Multi-byte values are little-endian unless stated otherwise.
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,3,{power_source, battery_soc, charge_status}} |
 | Read current time              | {0x12,0x06,0x00,{}}     | {0x00,6,{YY,MM,DD,HH,MM,SS}}              |
 | Sync RTC from GPS              | {0x13,0x06,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,3,{SOURCES, IR detail, ACC detail}}   |
+| Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,4,{SOURCES, IR, ACC, RTC}}            |
+| Set daily alarm                | {0x13,0x08,0x03,{HH,MM,SS}} | {0x00,0x00,{}}                         |
+| Cancel alarm                   | {0x11,0x08,0x00,{}}     | {0x00,0x00,{}}                             |
+| Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,4,{armed,HH,MM,SS}}                  |
 
 Notes on individual commands:
 
@@ -223,6 +227,25 @@ Notes on individual commands:
   `0x20` free-fall, `0x40` sleep change. They accumulate until the interrupt status
   is read; this command does **not** clear them. Raw axes are not exposed over this
   protocol (`ACC_ReadAxes()` exists in the firmware but has no command).
+- **Set daily alarm** takes three binary bytes, 24-hour: hour, minute, second.
+  The alarm has **no date** — it matches that time of day, every day, because the
+  hardware alarm can compare a day-of-month or a weekday and a time, and nothing
+  wider. It stays armed after it fires, so it comes round again the next day.
+
+  `STATUS = 0x01` means the payload was not three bytes, or a field was out of
+  range (hour > 23, minute or second > 59). Nothing is changed in that case: an
+  alarm that was already armed stays armed.
+
+  The alarm and its interrupt enable live in the RTC's backup domain, so **an
+  armed alarm survives an MCU reset** for as long as VBAT holds. That is
+  deliberate — it is what lets the alarm wake a SOM that was off when the MCU
+  restarted — but it means the master cannot assume a fresh MCU has no alarm. Use
+  `Read armed alarm` to find out.
+- **Cancel alarm** is `Turn OFF` on the alarm sensor ID. There is no magic time
+  value that means "cancel", so `00:00:00` is settable like any other time.
+- **Read armed alarm** returns `1` in the first byte when an alarm is armed and
+  `0` when it is not. The three time bytes are meaningful only in the first case
+  and read zero in the second.
 - **Read interrupt status** is described in full under
   [What the interrupt status register contains](#what-the-interrupt-status-register-contains).
   It is the only command that clears interrupt state, and the only one that releases
@@ -269,8 +292,10 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
 | `0x12,0x05` (battery) | 5 | two I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
-| `0x12,0x07` (interrupt status) | 5 | immediate — snapshots RAM latches, no bus access |
-| `0x13,*` (config) | 2 | IR/ACC re-init: several I2C1 writes |
+| `0x12,0x07` (interrupt status) | 6 | immediate — snapshots RAM latches, no bus access |
+| `0x12,0x08` (armed alarm) | 6 | immediate |
+| `0x11,0x08` (cancel alarm) | 2 | immediate |
+| `0x13,*` (config) | 2 | IR/ACC re-init: several I2C1 writes; alarm: immediate |
 
 ### 2.4 GPS NMEA Passthrough:
 

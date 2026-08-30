@@ -44,6 +44,7 @@ extern volatile bool sensors_ready;
 volatile uint8_t IR_INT;
 volatile uint8_t ACC_INT;
 volatile uint8_t MCU_INT;
+volatile uint8_t RTC_INT;
 volatile bool gps_time_synced = false;      // GPS time was successfully synchronized
 volatile bool gps_time_sync_request = false; // Request to try GPS time synchronization
 /* USER CODE END PTD */
@@ -110,7 +111,7 @@ void somSetInt(uint8_t source)
 /* Snapshot and clear all three interrupt latches, and release the line to the
  * SOM, as one indivisible operation.
  */
-void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc)
+void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc, uint8_t *rtc)
 {
 	uint32_t primask = __get_PRIMASK();
 
@@ -119,10 +120,12 @@ void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc)
 	*mcu = (uint8_t)MCU_INT;
 	*ir  = (uint8_t)IR_INT;
 	*acc = (uint8_t)ACC_INT;
+	*rtc = (uint8_t)RTC_INT;
 
 	MCU_INT = 0;
 	IR_INT  = 0;
 	ACC_INT = 0;
+	RTC_INT = 0;
 
 	/* deassert: release the line back to the external pull-up */
 	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
@@ -181,6 +184,11 @@ int main(void)
   MX_USART3_UART_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
+
+  /* Alarm A can be armed from a previous power cycle - by this firmware, or by
+   * the CubeMX block in MX_RTC_Init() on the board's very first boot. Sort out
+   * which before anything can raise an interrupt. */
+  rtc_alarmInit();
 
   HAL_Delay(1500);
 

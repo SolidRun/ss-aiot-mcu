@@ -48,6 +48,10 @@ void rtc_updeteDate(uint8_t Month, uint8_t Date , uint8_t Year);
 void rtc_getTime(RTC_TimeTypeDef* s_Time);
 void rtc_getDate(RTC_DateTypeDef* s_Date);
 bool rtc_gpsSyncIsValid(void);
+bool rtc_setDailyAlarm(uint8_t Hours, uint8_t Minutes, uint8_t Seconds);
+void rtc_cancelAlarm(void);
+bool rtc_getAlarm(uint8_t *Hours, uint8_t *Minutes, uint8_t *Seconds);
+void rtc_alarmInit(void);
 void rtc_markGpsSynced(void);
 /* USER CODE END Prototypes */
 

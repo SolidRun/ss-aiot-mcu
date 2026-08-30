@@ -86,6 +86,45 @@ void Sensor_RTC_Config(uint8_t *cmd_data ,uint8_t *status){
 	gps_time_sync_request = true ;
 }
 
+/* 0x13 0x08 - arm the daily alarm from {HH, MM, SS}, binary, 24-hour.
+ *
+ * Cancelling is 0x11 0x08, not a magic time value, so 00:00:00 is settable like
+ * any other time. */
+void Sensor_Alarm_Config(uint8_t *cmd_data, uint8_t data_len, uint8_t *status)
+{
+	if (data_len != 3U) {
+		*status = 1;
+		return;
+	}
+
+	if ((cmd_data[0] > 23U) || (cmd_data[1] > 59U) || (cmd_data[2] > 59U)) {
+		*status = 1;
+		return;
+	}
+
+	*status = rtc_setDailyAlarm(cmd_data[0], cmd_data[1], cmd_data[2]) ? 0U : 1U;
+}
+
+/* 0x12 0x08 - report the armed alarm.
+ *
+ * data[0] is 1 when an alarm is armed and 0 when it is not. The three time bytes
+ * are meaningful only when it is 1, and read zero otherwise.
+ *
+ * This is the only way for the master to learn what is armed after its own
+ * reboot or after the MCU's: the alarm lives in the backup domain and outlives
+ * both. */
+void Sensor_Alarm_Read(uint8_t *data, uint8_t *len, uint8_t *status)
+{
+	uint8_t h = 0, m = 0, s = 0;
+
+	*len = 4;
+	*status = 0;
+	data[0] = rtc_getAlarm(&h, &m, &s) ? 1U : 0U;
+	data[1] = h;
+	data[2] = m;
+	data[3] = s;
+}
+
 void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *len = 3;
     *status = 0;
@@ -136,8 +175,8 @@ void Sensor_GPS_Config(uint8_t *cmd_data){
 }
 
 void INT_Read(uint8_t *data, uint8_t *len) {
-    *len = 3;
-    somTakeInterrupts(&data[0], &data[1], &data[2]);
+    *len = 4;
+    somTakeInterrupts(&data[0], &data[1], &data[2], &data[3]);
 }
 
 /* Protocol command processor
@@ -156,6 +195,8 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         case CMD_SENSOR_OFF:
             if (cmd->sensor_id == SENSOR_LED) {
                 Sensor_LED_Off();
+            } else if (cmd->sensor_id == SENSOR_ALARM) {
+                rtc_cancelAlarm();
             }
             break;
 
@@ -179,6 +220,9 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
                 case SENSOR_BATTERY_CHARGER:
                 	Sensor_Charger_Read(resp->data, &resp->data_len, &resp->status);
                     break;
+                case SENSOR_ALARM:
+                    Sensor_Alarm_Read(resp->data, &resp->data_len, &resp->status);
+                    break;
                 case INTERRUPTS:
                 	INT_Read(resp->data, &resp->data_len);
                     break;
@@ -200,6 +244,9 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         			break;
         		case SENSOR_GPS:
         			Sensor_GPS_Config(cmd->data);
+        			break;
+        		case SENSOR_ALARM:
+        			Sensor_Alarm_Config(cmd->data, cmd->data_len, &resp->status);
         			break;
                 default:
                     resp->status = 1; // Unknown sensor

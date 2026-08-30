@@ -36,7 +36,8 @@ typedef enum {
 	SENSOR_GPS			   = 0x04,  //GPA sensor
     SENSOR_BATTERY_CHARGER = 0x05, // Battery charger status
     SENSOR_RTC              = 0x06,  // Real-time clock
-	INTERRUPTS              =0x07
+	INTERRUPTS              = 0x07,
+	SENSOR_ALARM            = 0x08   // RTC alarm, a time of day
 } SensorID_t;
 
 /* Command structure
