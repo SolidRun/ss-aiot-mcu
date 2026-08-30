@@ -82,42 +82,92 @@ HAL_StatusTypeDef BQ25638_SetTerminationCurrent(uint16_t mA) {
 
 
 // Status Reading
-BQ25638_Status_t BQ25638_GetStatus() {
 
-	BQ25638_Status_t status = {0};
-    uint8_t chg_status1 = 0;
-    uint16_t raw;
+/*
+ * Populate passed BQ25638_Status_t structure with status information.
+ * Returns HAL_OK on success, HAL_ERROR on error.
+ *
+ * On error, status values are partially uninitialised, caller should discard.
+ */
+HAL_StatusTypeDef BQ25638_GetStatus(BQ25638_Status_t *out) {
 
-    //Read battery status
-    if (BQ25638_ReadReg(BQ25638_REG_CHG_STATUS_1, &chg_status1) == HAL_OK) {
-    	status.power_source = chg_status1 & 0x07;
-    	status.charge_status = ( chg_status1 >> 3) & 0x07;
+    uint8_t  chg_status_0, chg_status_1, fault_status;
+    uint16_t adc_reg_ibat, adc_reg_vbat, adc_reg_vbus;
+    int32_t  adc_val_ibat;
+    uint32_t adc_val_vbat, adc_val_vbus;
 
-    }else{
-    	status.power_source = 0xFF;
-    	status.charge_status = 0xFF;
+    /* zero flags */
+    out->flags = 0;
+
+    /* read charger status register 0 */
+    if (BQ25638_ReadReg(BQ25638_REG_CHG_STATUS_0, &chg_status_0) != HAL_OK) {
+        return HAL_ERROR;
     }
 
-    //Read battery voltage and calculate SoC (%)
-    if (BQ25638_ReadReg16(BQ25638_REG_VBAT_ADC, &raw) == HAL_OK) {
-        // Bits 12:1 contain VBAT_ADC
-        uint16_t vbat_raw = (raw >> 1) & 0x0FFF; // shift out bit 0 (reserved) and mask 12 bits
+    /* check if mains present (PG_STAT (bit 7) vbus power-good) */
+    if (chg_status_0 & BQ25638_REG_CHG_STATUS_0__PG_STAT)
+        out->flags |= BQ25638_FLAG_MAINS;
 
-        // Convert to mV
-        float voltage = vbat_raw * 1.25f; // 1.25 mV per step
-
-        // Map voltage to SoC (%)
-        // Assume battery range 3.0V (0%) to 4.2V (100%)
-        float soc_f = ((voltage / 1000.0f) - 3.0f) / (4.2f - 3.0f) * 100.0f;
-        if (soc_f < 0) soc_f = 0;
-        if (soc_f > 100) soc_f = 100;
-
-        status.battery_soc = (uint8_t)soc_f;
-    } else {
-        status.battery_soc = 0xFF; // Error reading voltage
+    /* read charger status register 1 */
+    if (BQ25638_ReadReg(BQ25638_REG_CHG_STATUS_1, &chg_status_1) != HAL_OK) {
+        return HAL_ERROR;
     }
 
-    return status;
+    /* check if charging (two values from CHG_STAT mean not charging, all others mean charging) */
+    if (((chg_status_1 & BQ25638_REG_CHG_STATUS_1__CHG_STAT_MASK) != BQ25638_REG_CHG_STATUS_1__CHG_STAT__NOT_CHARGING) &&
+        ((chg_status_1 & BQ25638_REG_CHG_STATUS_1__CHG_STAT_MASK) != BQ25638_REG_CHG_STATUS_1__CHG_STAT__TERMINATION_DONE))
+        out->flags |= BQ25638_FLAG_CHARGING;
+
+    /* read charger fault status register */
+    if (BQ25638_ReadReg(BQ25638_REG_FAULT_STATUS, &fault_status) != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    /* check if mains has fault (over-voltage) */
+    if (fault_status & BQ25638_REG_FAULT_STATUS__VBUS_FAULT_STAT)
+        out->flags |= BQ25638_FLAG_MAINS_FAULT;
+
+    /* check if battery has fault (dead or over-voltage) */
+    if (fault_status & BQ25638_REG_FAULT_STATUS__VBUS_FAULT_STAT)
+        out->flags |= BQ25638_FLAG_BAT_FAULT;
+
+    /* read adc ibat register */
+    if (BQ25638_ReadReg16(BQ25638_REG_IBAT_ADC, &adc_reg_ibat) != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    /* unpack ibat adc value (bits 3-15, 2s complement) and scale to mA (raw 5mA per bit) */
+    adc_val_ibat = (int16_t)adc_reg_ibat >> 3;
+    adc_val_ibat = adc_val_ibat * 5;
+
+    /* return ibat adc value in mA (valid range -10000 - +5025) */
+    out->ibat = adc_val_ibat;
+
+    /* read adc vbat register */
+    if (BQ25638_ReadReg16(BQ25638_REG_VBAT_ADC, &adc_reg_vbat) != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    /* unpack vbat adc value (bits 1-12) and scale to mV (raw 1.25mV per bit) */
+    adc_val_vbat = (adc_reg_vbat & 0x1ffe) >> 1;
+    adc_val_vbat = (adc_val_vbat * 5) / 4;
+
+    /* return vbat adc value in mV (valid range 0 - 5000) */
+    out->vbat = adc_val_vbat;
+
+    /* read adc vbus register */
+    if (BQ25638_ReadReg16(BQ25638_REG_VBUS_ADC, &adc_reg_vbus) != HAL_OK) {
+        return HAL_ERROR;
+    }
+
+    /* unpack vbus adc value (bits 2-14) and scale to mV (raw 5mV per bit) */
+    adc_val_vbus = (adc_reg_vbus & 0x7ffc) >> 2;
+    adc_val_vbus = adc_val_vbus * 5;
+
+    /* return vbus adc value in mV (valid range 0 - 20000) */
+    out->vbus = adc_val_vbus;
+
+    return HAL_OK;
 }
 
 
@@ -182,12 +232,20 @@ void BQ25638_INT_Callback(void) {
 
 // Initialize BQ25638: set CE high, default charge current/voltage
 HAL_StatusTypeDef BQ25638_Init(void) {
+    HAL_StatusTypeDef status;
+
     BQ25638_SetCE(0);                // Enable charging circuitry
     //BQ25638_SetChargeCurrent(1024);  // Default 1A
     //BQ25638_SetChargeVoltage(4208);  // Default 4.208V
     //BQ25638_SetTerminationCurrent(128); // Default termination
-    BQ25638_SetTsIgnore(1);
+    status = BQ25638_SetTsIgnore(1);
+    if (status != HAL_OK)
+        return status;
+
     BQ25638_EnableAdc(1);
+    if (status != HAL_OK)
+        return status;
+
     return BQ25638_EnableCharging();
 }
 

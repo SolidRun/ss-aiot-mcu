@@ -126,14 +126,24 @@ void Sensor_Alarm_Read(uint8_t *data, uint8_t *len, uint8_t *status)
 }
 
 void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
-    *len = 3;
-    *status = 0;
+    *len = 7;
     BQ25638_Status_t BQ_status;
-    BQ_status = BQ25638_GetStatus();
 
-    data[0] = BQ_status.power_source;
-    data[1] = BQ_status.battery_soc;
-    data[2] = BQ_status.charge_status;
+    if (BQ25638_GetStatus(&BQ_status) == HAL_OK) {
+        /* The three measurements are 16-bit, little-endian, low byte first.
+         * ibat is signed - two's complement, as the charger reports it. */
+        data[0] = BQ_status.flags;
+        data[1] = (uint8_t)((uint16_t)BQ_status.ibat & 0xff);
+        data[2] = (uint8_t)((uint16_t)BQ_status.ibat >> 8);
+        data[3] = (uint8_t)(BQ_status.vbat & 0xff);
+        data[4] = (uint8_t)(BQ_status.vbat >> 8);
+        data[5] = (uint8_t)(BQ_status.vbus & 0xff);
+        data[6] = (uint8_t)(BQ_status.vbus >> 8);
+        *status = 0;
+    } else {
+        /* On error return non-zero status, data is now invalid and master must discard it. */
+        *status = 1;
+    }
 }
 
 void Sensor_GPS_Read(uint8_t *data, uint8_t *len, uint8_t *status) {

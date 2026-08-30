@@ -207,7 +207,7 @@ Multi-byte values are little-endian unless stated otherwise.
 | Set ACC threshold              | {0x13,0x03,0x01,{THS}}  | {0x00,0x00,{}}                             |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,32,{32 raw NMEA bytes}} / {0x01,32,{padding}} if nothing queued |
 | Configure GPS power/reset      | {0x13,0x04,0x02,{RSTN,EN}} | {0x00,0x00,{}}                          |
-| Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,3,{power_source, battery_soc, charge_status}} |
+| Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,7,{flags, int16 ibat, uint16 vbat, uint16 vbus}} |
 | Read current time              | {0x12,0x06,0x00,{}}     | {0x00,6,{YY,MM,DD,HH,MM,SS}}              |
 | Sync RTC from GPS              | {0x13,0x06,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,4,{SOURCES, IR, ACC, RTC}}            |
@@ -290,7 +290,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x02` (IR data) | 6 | two I2C1 sensor reads |
 | `0x12,0x03` (ACC interrupt) | 3 | immediate |
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
-| `0x12,0x05` (battery) | 5 | two I2C1 register reads |
+| `0x12,0x05` (battery) | 9 | five I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
 | `0x12,0x07` (interrupt status) | 6 | immediate — snapshots RAM latches, no bus access |
 | `0x12,0x08` (armed alarm) | 6 | immediate |
@@ -606,26 +606,29 @@ has no way to set them independently.
 
 ### 3.3 Battery Charging:
 
-Charger: BQ25638 on I2C1. `battery_soc` is derived from the VBAT ADC with a linear
-3.0 V = 0% / 4.2 V = 100% mapping — an estimate, not a fuel gauge.
+Charger: BQ25638 on I2C1. The response is seven bytes:
 
-| Power Source Code | Meaning                 |
-|------------------|------------------------|
-| 000b             | Not powered from VBUS  |
-| 100b             | Unknown adapter        |
-| 111b             | Boost OTG              |
+| Byte | Field | Encoding |
+|---|---|---|
+| 0 | `flags` | Bitmask, see below |
+| 1-2 | `ibat` | Battery current in **mA**, `int16` (range -10000 - +5025). **Signed** — negative is discharging |
+| 3-4 | `vbat` | Battery voltage in **mV**, `uint16` (range 0 - 5000) |
+| 5-6 | `vbus` | Supply (J1 DC Jack or J3 USB) voltage in **mV**, `uint16` (range 0 - 20000) |
 
+The three measurements are reported in their natural units, at the resolution the
+charger's ADC provides. All three
+are 16-bit **little-endian**, low byte first, per [Command & Response Format](#21-command--response-format).
 
-| Charge Status Code | Meaning                         |
-|-------------------|---------------------------------|
-| 000               | Not charging                     |
-| 001               | Trickle charge                   |
-| 010               | Pre-charge                       |
-| 011               | Fast charge (CC mode)            |
-| 100               | Taper charge (CV mode)           |
-| 110               | Top-off timer active charging    |
-| 111               | Charge termination done          |
+`ibat` is signed (two's complement).
 
+FLags are as follows:
+
+| Bit | Encoding |
+| --- | -------- |
+|   0 | Power Supply connected (J1 DC Jack or J3 USB)
+|   1 | Battery is charging |
+|   2 | Power supply has fault (over-voltage) |
+|   3 | Battery has fault (dead or over-voltage) |
 
 ### 4. Known Limitations:
 

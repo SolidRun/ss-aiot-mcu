@@ -23,8 +23,14 @@
 #define BQ25638_REG_CHG_CTRL_4 0x19
 #define BQ25638_REG_CHG_CTRL_5 0x1A
 #define BQ25638_REG_CHG_STATUS_0 0x20
+#define BQ25638_REG_CHG_STATUS_0__PG_STAT 0x80
 #define BQ25638_REG_CHG_STATUS_1 0x21
+#define BQ25638_REG_CHG_STATUS_1__CHG_STAT_MASK 0x38
+#define BQ25638_REG_CHG_STATUS_1__CHG_STAT__NOT_CHARGING 0x00
+#define BQ25638_REG_CHG_STATUS_1__CHG_STAT__TERMINATION_DONE 0x38
 #define BQ25638_REG_FAULT_STATUS 0x22
+#define BQ25638_REG_FAULT_STATUS__VBUS_FAULT_STAT 0x80
+#define BQ25638_REG_FAULT_STATUS__BAT_FAULT_STAT 0x40
 #define BQ25638_REG_CHG_FLAG_0 0x23
 #define BQ25638_REG_CHG_FLAG_1 0x24
 #define BQ25638_REG_FAULT_FLAG 0x25
@@ -34,6 +40,8 @@
 #define BQ25638_REG_ADC_CTRL  0x2B
 #define BQ25638_REG_NTC_CTRL0 0x1C
 #define BQ25638_REG_PART_INFO 0x3F
+#define BQ25638_REG_IBAT_ADC 0x2F
+#define BQ25638_REG_VBUS_ADC 0x31
 #define BQ25638_REG_VBAT_ADC 0x35
 
 // GPIO definitions for board connections
@@ -55,18 +63,17 @@
 
 
 
-    //Charge Status:
-    //0 = Not Charging
-    //1 = Trickle Charge
-    //2 = Pre-charge
-    //3 = Fast Charge (CC)
-    //4 = Taper Charge (CV)
-    //6 = Top-off Timer Active Charging
-    //7 = Charge Termination Done
+/* Charger status flags for reporting to Host */
+#define BQ25638_FLAG_MAINS (1u << 0) // external supply connected
+#define BQ25638_FLAG_CHARGING (1u << 1) // current flowing into the battery
+#define BQ25638_FLAG_MAINS_FAULT (1u << 2) // external supply has error
+#define BQ25638_FLAG_BAT_FAULT (1u << 3) // battery has error
+
 typedef struct {
-    uint8_t power_source;   // 0=Not powered from VBUS; 4=Unknown adaptor; 7=In boost OTG;
-    uint8_t charge_status;  // 0=Not Charging;  2=Pre-charge; 3=Fast Charge; 7=Charge Termination Done;
-    uint8_t battery_soc;    // Battery State of Charge (%)
+    uint8_t flags;
+    int16_t ibat; // battery current in mA (range -10000 - +5025)
+    uint16_t vbus; // mains voltage in mV (range 0 - 20000)
+    uint16_t vbat; // battery voltage in mV (range 0 - 5000)
 } BQ25638_Status_t;
 
 //I2C Basic Functions
@@ -80,7 +87,13 @@ HAL_StatusTypeDef BQ25638_SetChargeVoltage(uint16_t mV);
 HAL_StatusTypeDef BQ25638_SetTerminationCurrent(uint16_t mA);
 
 //Status Reading
-BQ25638_Status_t BQ25638_GetStatus(void);
+
+/* Read the charger state into *out.
+ *
+ * Returns HAL_OK only when every field is valid. On failure *out may have been
+ * partly written and hould not be used. */
+HAL_StatusTypeDef BQ25638_GetStatus(BQ25638_Status_t *out);
+
 uint8_t BQ25638_GetChargeStatus(void);
 uint8_t BQ25638_GetFault(void);
 
