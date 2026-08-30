@@ -137,14 +137,7 @@ void Sensor_GPS_Config(uint8_t *cmd_data){
 
 void INT_Read(uint8_t *data, uint8_t *len) {
     *len = 3;
-    data[0] = somGetInt();
-    somClearINT();
-
-    data[1] = IR_SENSOR_getInt();
-    IR_SENSOR_clearInt();
-
-    data[2] = ACC_getInt();
-    ACC_clearInt();
+    somTakeInterrupts(&data[0], &data[1], &data[2]);
 }
 
 /* Protocol command processor

@@ -58,6 +58,7 @@ void SomDisable(void);
 void somSetInt(void);
 uint8_t somGetInt(void);
 void somClearINT(void);
+void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc);
 void resetI2C2(void);
 /* USER CODE END EFP */
 

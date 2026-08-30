@@ -110,6 +110,29 @@ void somClearINT(void) {
 	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
 }
 
+/* Snapshot and clear all three interrupt latches, and release the line to the
+ * SOM, as one indivisible operation.
+ */
+void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc)
+{
+	uint32_t primask = __get_PRIMASK();
+
+	__disable_irq();
+
+	*mcu = (uint8_t)MCU_INT;
+	*ir  = (uint8_t)IR_INT;
+	*acc = (uint8_t)ACC_INT;
+
+	MCU_INT = 0;
+	IR_INT  = 0;
+	ACC_INT = 0;
+
+	/* deassert: release the line back to the external pull-up */
+	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
+
+	__set_PRIMASK(primask);
+}
+
 void resetI2C2(void){
 	HAL_I2C_DeInit(&hi2c2);
 	MX_I2C2_Init();
