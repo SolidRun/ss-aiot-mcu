@@ -13,29 +13,51 @@
 #include "ssaiot_sc.h"
 
 /*
- * Byte offsets within the payload of CMD_SENSOR_READ / SENSOR_INTERRUPTS.
- * All three sources are cleared by that read, so it is the only place the
- * interrupt line may be sampled - a sub-device polling its own sensor would
- * consume events belonging to the others.
+ * Payload of CMD_SENSOR_READ / SENSOR_INTERRUPTS: a bitfield of the sources
+ * that fired, followed by one detail byte for each source that has one.
+ *
+ * Every byte is an accumulated latch that the read clears, so this is the only
+ * place the interrupt state may be sampled - a sub-device reading it for itself
+ * would consume events belonging to the others. It answers "what fired since
+ * the last read", never "what is true now".
  */
-#define SSAIOT_SC_INT_MCU		0
+#define SSAIOT_SC_INT_SOURCES		0
 #define SSAIOT_SC_INT_IR		1
 #define SSAIOT_SC_INT_ACC		2
-#define SSAIOT_SC_INT_LEN		3
+#define SSAIOT_SC_INT_RTC		3
+#define SSAIOT_SC_INT_LEN		4
 
-/* Codes reported in the IR and ACC bytes */
-#define SSAIOT_SC_IR_MOTION		BIT(1)	/* 0x02 */
-#define SSAIOT_SC_IR_PRESENCE		BIT(2)	/* 0x04 */
-#define SSAIOT_SC_ACC_MOTION		BIT(0)	/* 0x01 */
+/* data[0], which sources fired */
+#define SSAIOT_SC_INT_SRC_MCU		BIT(0)
+#define SSAIOT_SC_INT_SRC_IR		BIT(1)
+#define SSAIOT_SC_INT_SRC_ACC		BIT(2)
+#define SSAIOT_SC_INT_SRC_RTC		BIT(3)
+#define SSAIOT_SC_INT_SRC_CHARGER	BIT(4)	/* allocated, never set yet */
 
-/* Demultiplexing table: which payload byte and which bit raises each IRQ */
+/* data[1], masked FUNC_STATUS of the IR sensor */
+#define SSAIOT_SC_IR_MOTION		BIT(1)
+#define SSAIOT_SC_IR_PRESENCE		BIT(2)
+
+/* data[2], WAKE_UP_SRC of the accelerometer, the axis bits left aside */
+#define SSAIOT_SC_ACC_WAKEUP		BIT(3)
+#define SSAIOT_SC_ACC_FREEFALL		BIT(5)
+#define SSAIOT_SC_ACC_SLEEP_CHANGE	BIT(6)
+
+/* data[3] */
+#define SSAIOT_SC_RTC_ALARM_A		BIT(0)
+
+/*
+ * Demultiplexing table: which payload byte and which bit raises each IRQ. A
+ * source with no detail byte is dispatched from its own bit in data[0].
+ */
 static const struct {
 	u8 offset;
 	u8 mask;
 } ssaiot_sc_irq_source[SSAIOT_SC_NUM_IRQS] = {
 	[SSAIOT_SC_IRQ_IR_MOTION]   = { SSAIOT_SC_INT_IR,  SSAIOT_SC_IR_MOTION },
 	[SSAIOT_SC_IRQ_IR_PRESENCE] = { SSAIOT_SC_INT_IR,  SSAIOT_SC_IR_PRESENCE },
-	[SSAIOT_SC_IRQ_ACC_MOTION]  = { SSAIOT_SC_INT_ACC, SSAIOT_SC_ACC_MOTION },
+	[SSAIOT_SC_IRQ_ACC_WAKEUP]  = { SSAIOT_SC_INT_ACC, SSAIOT_SC_ACC_WAKEUP },
+	[SSAIOT_SC_IRQ_RTC_ALARM]   = { SSAIOT_SC_INT_RTC, SSAIOT_SC_RTC_ALARM_A },
 };
 
 /*
@@ -82,9 +104,9 @@ static const struct irq_domain_ops ssaiot_sc_irq_domain_ops = {
  *
  * Reading the interrupt status both reports and clears every source, and also
  * deasserts the controller's interrupt line, so one read per assertion is both
- * necessary and sufficient. The first byte of that status says whether the
- * controller is asserting at all, which is what decides whether the interrupt
- * was ours to claim.
+ * necessary and sufficient. The source bitfield says whether anything on the
+ * controller fired at all, which is what decides whether the interrupt was ours
+ * to claim.
  */
 static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 {
@@ -110,8 +132,13 @@ static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 	}
 
 	/* somebody else pulled the line down, leave it to them */
-	if (!flags[SSAIOT_SC_INT_MCU])
+	if (!flags[SSAIOT_SC_INT_SOURCES])
 		return IRQ_NONE;
+
+	/* mcu source means system controller restarted */
+	if (flags[SSAIOT_SC_INT_SOURCES] & SSAIOT_SC_INT_SRC_MCU)
+		dev_warn(priv->dev,
+			 "controller restarted, sensor configuration was lost.\n");
 
 	for (i = 0; i < SSAIOT_SC_NUM_IRQS; i++) {
 		if (!(flags[ssaiot_sc_irq_source[i].offset] &

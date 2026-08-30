@@ -17,7 +17,11 @@ static const struct resource ssaiot_sc_ir_resources[] = {
 };
 
 static const struct resource ssaiot_sc_acc_resources[] = {
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACC_MOTION, "motion"),
+	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACC_WAKEUP, "wakeup"),
+};
+
+static const struct resource ssaiot_sc_rtc_resources[] = {
+	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_RTC_ALARM, "alarm"),
 };
 
 /*
@@ -44,6 +48,8 @@ static const struct mfd_cell ssaiot_sc_cells[] = {
 		.name = "ssaiot-sc-charger",
 	}, {
 		.name = "ssaiot-sc-rtc",
+		.resources = ssaiot_sc_rtc_resources,
+		.num_resources = ARRAY_SIZE(ssaiot_sc_rtc_resources),
 	},
 };
 
