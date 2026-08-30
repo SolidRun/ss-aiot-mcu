@@ -86,10 +86,48 @@ Besides I2C the MCU drives one interrupt line towards the SOM, `MCU_INT` (`PA15`
 The master must therefore configure the line as level triggered, active low. Under
 Linux that is `IRQ_TYPE_LEVEL_LOW` in the device tree.
 
-The line is asserted by the IR and accelerometer paths and is released by the
-`Read MCU/IR/ACC interrupts` command, which clears all three sources. It stays
-asserted until that command is issued, so a master that never reads the interrupt
-status will see the line held low indefinitely.
+The line is asserted whenever a source records an interrupt, and released by the
+`Read interrupt status` command, which snapshots and clears every source in one
+operation. It stays asserted until that command is issued, so a master that never
+reads the interrupt status will see the line held low indefinitely.
+
+#### What the interrupt status register contains
+
+`Read interrupt status` (`0x12 0x07`) returns three bytes: a source bitfield,
+followed by one detail byte per source that has one.
+
+| Byte | Contents |
+|------|----------|
+| `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer. `0x08` RTC and `0x10` charger are allocated and are never set yet. |
+| `data[1]` | **IR detail** — masked `FUNC_STATUS`: `0x02` motion, `0x04` presence. `0x01` thermal shock is routed off the pin and masked in firmware. |
+| `data[2]` | **Accelerometer detail** — `WAKE_UP_SRC` as the device reports it: `0x01` Z, `0x02` Y, `0x04` X, `0x08` the wake-up flag, `0x20` free-fall, `0x40` sleep change. |
+
+A source occupies its bit whether or not it has a detail byte. `0x01` is raised
+once during init, so the first read after a reset reports it — every threshold the
+master configured is back at its default and needs setting again. Earlier firmware
+gave the master no way to tell a reboot from an idle MCU.
+
+`data[0]` was a plain `0` / `1` in earlier firmware. A master testing `!= 0` is
+unaffected; one testing `== 1` now reads that as "the MCU itself".
+
+#### Every byte answers "what fired", never "what is true now"
+
+All three bytes are accumulated latches, and the read clears them. Two sources
+firing between reads produce both bits rather than the last one: presence does not
+mask motion, and an accelerometer wake-up does not overwrite an earlier one.
+
+The reason the firmware cannot report present state is physical. Both sensors
+drive their INT pin as a **level**, not a pulse — `ALGO_CONFIG.INT_PULSED` is `0`
+on the STHS34PF80 — and the firmware watches only the rising edge. There is no
+falling-edge handler anywhere in the project. So a condition that stays asserted
+produces exactly one event, and once the master has consumed it there is no second
+edge and no way to ask whether it is still true. For present state, read the
+sensor's own value command instead: `0x12 0x02` returns live presence and motion
+counts.
+
+The snapshot is taken with interrupts masked, so `data[0]` is exactly the OR of
+the sources at a single instant, and an edge that arrives during the read is
+reported on the next one rather than lost.
 
 #### Why open drain, and why active low
 
@@ -162,24 +200,33 @@ Multi-byte values are little-endian unless stated otherwise.
 | Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
-| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,5,{INT, int16 presenceVal, int16 motionVal}}       |
+| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4,{int16 presenceVal, int16 motionVal}}            |
 | Set IR threshold               | {0x13,0x02,0x02,{THS_H,THS_L}}  | {0x00,0x00,{}}                     |
-| Read ACC interrupt             | {0x12,0x03,0x00,{}}     | {0x00,1,{INT}}                            |
+| Read ACC interrupt             | {0x12,0x03,0x00,{}}     | {0x00,1,{WAKE_UP_SRC mask}}                |
 | Set ACC threshold              | {0x13,0x03,0x01,{THS}}  | {0x00,0x00,{}}                             |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,32,{32 raw NMEA bytes}} / {0x01,32,{padding}} if nothing queued |
 | Configure GPS power/reset      | {0x13,0x04,0x02,{RSTN,EN}} | {0x00,0x00,{}}                          |
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,3,{power_source, battery_soc, charge_status}} |
 | Read current time              | {0x12,0x06,0x00,{}}     | {0x00,6,{YY,MM,DD,HH,MM,SS}}              |
 | Sync RTC from GPS              | {0x13,0x06,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read MCU/IR/ACC interrupts     | {0x12,0x07,0x00,{}}     | {0x00,3,{MCU, IR, ACC}}                    |
+| Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,3,{SOURCES, IR detail, ACC detail}}   |
 
 Notes on individual commands:
 
 - **Set IR threshold** takes **two** bytes, big-endian (`THS_H` first). The IR
   threshold range is 0–32767, so one byte cannot express the useful values.
-- **Read ACC interrupt** returns the accelerometer *wake-up interrupt flag*, not an
-  acceleration value. Raw axes are not exposed over this protocol
-  (`ACC_ReadAxes()` exists in the firmware but has no command).
+- **Read IR data** returns presence and motion counts only. It carries no interrupt
+  information and clears none — that belongs to `Read interrupt status`. The payload
+  is 4 bytes, so read 6.
+- **Read ACC interrupt** returns the accelerometer's own `WAKE_UP_SRC` bits rather
+  than an acceleration value: `0x01` Z, `0x02` Y, `0x04` X, `0x08` the wake-up flag,
+  `0x20` free-fall, `0x40` sleep change. They accumulate until the interrupt status
+  is read; this command does **not** clear them. Raw axes are not exposed over this
+  protocol (`ACC_ReadAxes()` exists in the firmware but has no command).
+- **Read interrupt status** is described in full under
+  [What the interrupt status register contains](#what-the-interrupt-status-register-contains).
+  It is the only command that clears interrupt state, and the only one that releases
+  the `MCU_INT` line.
 - **Read GPS data** returns **raw NMEA bytes**, not a parsed position. It is a
   passthrough: the MCU does not decode coordinates at all. The payload is **always
   32 bytes** — packed with as many queued sentences as fit and padded with newlines
@@ -217,12 +264,12 @@ Total bytes the master should read (`2 + DATA_LEN`):
 |---------|---------------|-----------------|
 | `0x10` / `0x11` (LED on/off) | 2 | immediate |
 | `0x12,0x01` (LED status) | 3 | immediate |
-| `0x12,0x02` (IR data) | 7 | one I2C1 sensor read |
+| `0x12,0x02` (IR data) | 6 | two I2C1 sensor reads |
 | `0x12,0x03` (ACC interrupt) | 3 | immediate |
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
 | `0x12,0x05` (battery) | 5 | two I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
-| `0x12,0x07` (interrupts) | 5 | I2C1 reads for IR + ACC |
+| `0x12,0x07` (interrupt status) | 5 | immediate — snapshots RAM latches, no bus access |
 | `0x13,*` (config) | 2 | IR/ACC re-init: several I2C1 writes |
 
 ### 2.4 GPS NMEA Passthrough:
@@ -567,9 +614,10 @@ Current firmware behaviour the master side should be aware of.
   than an error, because the response length is initialised to 2.
 - **`Turn ON` / `Turn OFF` with a sensor ID other than `SENSOR_LED`** return
   `STATUS = 0x00` without doing anything.
-- **Interrupt flags are cleared on read.** `Read IR data` and
-  `Read MCU/IR/ACC interrupts` both read and clear the IR and ACC flags, so
-  whichever command runs first consumes the event.
+- **Only `Read interrupt status` clears interrupt state.** `Read IR data` no longer
+  carries or clears it, and `Read ACC interrupt` reports the accelerometer's bits
+  without clearing them. Earlier firmware cleared from the value reads too, so
+  whichever command ran first consumed the event.
 - **The stuck-bus watchdog fires after ~10 s**, not 10 ms: the counter is
   driven by TIM6 at 1 Hz while the timeout constant is named as milliseconds.
   If the master dies mid-transaction, expect the MCU to be unresponsive for about
@@ -600,8 +648,23 @@ Current firmware behaviour the master side should be aware of.
 - **No UBX is parsed.** The firmware reads NMEA only, which means the receiver's
   `fullyResolved` / `confirmedTime` / `tAcc` indications are not available — see
   [Timekeeping](#25-timekeeping).
-- **The IR and ACC interrupt sources are not latched by the firmware.**
-  `FUNC_STATUS` on the STHS34PF80 is clear-on-read, so an event that arrives
-  between two reads can be consumed without ever being reported.
+- **The interrupt bytes report events, not present state**, and there is no
+  falling-edge handler, so the master is never told when a condition ends. See
+  [Every byte answers "what fired", never "what is true now"](#every-byte-answers-what-fired-never-what-is-true-now).
+
+  An earlier revision of this file claimed `FUNC_STATUS` on the STHS34PF80 is
+  clear-on-read. It is not: `tshock`, `mot` and `pres` are level flags re-evaluated
+  every ODR cycle, and only the `DRDY` bit in `STATUS` (`0x23`) is cleared by being
+  read.
+- **Presence and motion currently return the same value.** The STHS34PF80's filter
+  bandwidths (`LPF_M`, `LPF_P`, `LPF_P_M`, `LPF_A_T`) are never configured, so they
+  stay at their reset divider and the two algorithm outputs are the same signal.
+  Motion therefore responds to slow changes that a motion detector should ignore.
+- **The IR baseline walks after a reset**, because `sths34pf80_algo_reset()` is
+  never called. Measured: presence climbed monotonically from −856 to +235 over
+  twenty seconds with nothing moving in front of the sensor. With a low threshold
+  that settling alone raises a presence event.
+- **Expect a spurious motion event about a second after every MCU reset**, from the
+  same filter transient. Both runs of the measurement above showed it.
 - **There is no `HAL_I2C_ErrorCallback`.** An I2C2 error is left to the stuck-bus
   watchdog above rather than being handled where it happens.
