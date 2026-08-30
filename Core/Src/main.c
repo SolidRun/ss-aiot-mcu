@@ -43,7 +43,7 @@
 extern volatile bool sensors_ready;
 volatile uint8_t IR_INT;
 volatile bool ACC_INT;
-volatile bool MCU_INT;
+volatile uint8_t MCU_INT;
 volatile bool gps_time_synced = false;      // GPS time was successfully synchronized
 volatile bool gps_time_sync_request = false; // Request to try GPS time synchronization
 /* USER CODE END PTD */
@@ -94,20 +94,17 @@ void SomDisable(void) {
     HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, GPIO_PIN_RESET);
 }
 
-void somSetInt(void) {
+/* Record an interrupt source and assert the line to the SOM.
+ */
+void somSetInt(uint8_t source)
+{
+	uint32_t primask = __get_PRIMASK();
+
+	__disable_irq();
+	MCU_INT |= source;
 	/* assert: drive the line low */
 	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_RESET);
-	MCU_INT = 1;
-}
-
-uint8_t somGetInt(void) {
-	return MCU_INT;
-}
-
-void somClearINT(void) {
-	MCU_INT = 0;
-	/* deassert: release the line back to external pull-up */
-	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
+	__set_PRIMASK(primask);
 }
 
 /* Snapshot and clear all three interrupt latches, and release the line to the
@@ -200,6 +197,7 @@ int main(void)
   GPIO_EnableSensorInterrupts();
 
   SomEnable();
+  somSetInt(INT_SRC_MCU);
   HAL_TIM_Base_Start_IT(&htim6);
   UBlox_Init();          /* discard the GNSS backlog */
   /* USER CODE END 2 */

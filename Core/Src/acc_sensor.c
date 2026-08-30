@@ -115,6 +115,6 @@ void ACC_HandleInt()
 	ACC_INT = ACC_CheckWakeUp();
 	if (ACC_INT) {
 		SomEnable();
-		somSetInt();
+		somSetInt(INT_SRC_ACCEL);
 	}
 }

@@ -41,7 +41,14 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-
+/* Interrupt sources, reported as a bitfield in data[0] of the interrupt
+ * read (0x12 0x07). A source occupies its bit whether or not it currently
+ * has a detail byte attached. */
+#define INT_SRC_MCU      0x01U   /* the firmware itself, no detail byte yet */
+#define INT_SRC_IR       0x02U   /* STHS34PF80,  detail in data[1]          */
+#define INT_SRC_ACCEL    0x04U   /* ISM330DHCX,  detail in data[2]          */
+#define INT_SRC_RTC      0x08U   /* reserved, never set yet                 */
+#define INT_SRC_CHARGER  0x10U   /* reserved, never set yet                 */
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
@@ -55,9 +62,7 @@ void Error_Handler(void);
 /* USER CODE BEGIN EFP */
 void SomEnable(void);
 void SomDisable(void);
-void somSetInt(void);
-uint8_t somGetInt(void);
-void somClearINT(void);
+void somSetInt(uint8_t source);
 void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc);
 void resetI2C2(void);
 /* USER CODE END EFP */

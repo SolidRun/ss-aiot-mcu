@@ -209,6 +209,6 @@ void IR_HandleInt()
     /* report any interrupts to som */
     if (IR_INT) {
 	    SomEnable();
-	    somSetInt();
+	    somSetInt(INT_SRC_IR);
     }
 }
