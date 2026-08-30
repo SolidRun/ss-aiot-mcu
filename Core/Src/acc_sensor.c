@@ -4,7 +4,7 @@
 #include "stdbool.h"
 
 extern I2C_HandleTypeDef hi2c1;
-extern bool ACC_INT;
+extern volatile bool ACC_INT;
 // Static accelerometer object
 static ISM330DHCX_Object_t ism330dhcx;
 #define ACC_THS_DEFAULT  0x04

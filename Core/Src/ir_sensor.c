@@ -9,7 +9,7 @@
 #include "main.h" // For hi2c1, HAL_Delay
 #include "stdbool.h"
 
-extern uint8_t IR_INT;
+extern volatile uint8_t IR_INT;
 extern I2C_HandleTypeDef hi2c1;  // CubeMX I2C handle
 //------------------------------------------------------------------------------
 // Private variables

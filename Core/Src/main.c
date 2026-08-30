@@ -41,11 +41,11 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 extern volatile bool sensors_ready;
-uint8_t IR_INT;
-bool ACC_INT;
-bool MCU_INT;
-bool gps_time_synced = false;      // GPS time was successfully synchronized
-bool gps_time_sync_request = false; // Request to try GPS time synchronization
+volatile uint8_t IR_INT;
+volatile bool ACC_INT;
+volatile bool MCU_INT;
+volatile bool gps_time_synced = false;      // GPS time was successfully synchronized
+volatile bool gps_time_sync_request = false; // Request to try GPS time synchronization
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/

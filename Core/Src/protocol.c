@@ -11,8 +11,8 @@
 #include <string.h>
 
 extern uint8_t acc_ths;
-extern bool gps_time_synced;
-extern bool gps_time_sync_request;
+extern volatile bool gps_time_synced;
+extern volatile bool gps_time_sync_request;
 
 void Sensor_LED_On(void) {
 	HAL_GPIO_WritePin(LED_MCU_GPIO_Port, LED_MCU_Pin, GPIO_PIN_SET);
