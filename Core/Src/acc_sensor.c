@@ -4,7 +4,7 @@
 #include "stdbool.h"
 
 extern I2C_HandleTypeDef hi2c1;
-extern volatile bool ACC_INT;
+extern volatile uint8_t ACC_INT;
 // Static accelerometer object
 static ISM330DHCX_Object_t ism330dhcx;
 #define ACC_THS_DEFAULT  0x04
@@ -76,21 +76,32 @@ int ACC_ReadAxes(ISM330DHCX_Axes_t *axes) {
     return ISM330DHCX_ACC_GetAxes(&ism330dhcx, axes);
 }
 
-// Function to check wake-up source
-bool ACC_CheckWakeUp(void) {
+/**
+ * @brief Read the wake-up source the device is reporting.
+ * @retval >=0  WAKE_UP_SRC bits: 0x01 Z, 0x02 Y, 0x04 X, 0x08 WU_IA,
+ *              0x20 free-fall, 0x40 sleep change
+ * @retval  -1  the read failed - the device state is unknown
+ *
+ * Relayed as the device reports them. all_sources_get already fetches this
+ * register; only wu_ia was being kept.
+ *
+ * SLEEP_STATE is deliberately left out. It is a state, not an event, and a
+ * state bit ORed into an accumulating latch would stick there for good.
+ */
+int ACC_CheckWakeUp(void)
+{
     ism330dhcx_all_sources_t src;
-    // Read all sources from sensor
-    if (ism330dhcx_all_sources_get(&ism330dhcx.Ctx, &src) == ISM330DHCX_OK) {
-        // Check if wake-up interrupt occurred
-        if (src.all_int_src.wu_ia) {
-            // Wake-up detected
-        	return 1;
-        } else {
-            // No wake-up
-        	return 0;
-        }
+
+    if (ism330dhcx_all_sources_get(&ism330dhcx.Ctx, &src) != ISM330DHCX_OK) {
+        return -1;
     }
-    return 0;
+
+    return (int)( src.wake_up_src.z_wu
+              | (src.wake_up_src.y_wu             << 1)
+              | (src.wake_up_src.x_wu             << 2)
+              | (src.wake_up_src.wu_ia            << 3)
+              | (src.wake_up_src.ff_ia            << 5)
+              | (src.wake_up_src.sleep_change_ia  << 6));
 }
 
 int ACC_getInt()
@@ -112,7 +123,16 @@ void ACC_clearInt()
  */
 void ACC_HandleInt()
 {
-	ACC_INT = ACC_CheckWakeUp();
+	int src = ACC_CheckWakeUp();
+
+	/* abort on error */
+	if (src < 0)
+		return;
+
+	/* accumulate interrupts */
+	ACC_INT |= (uint8_t)src;
+
+	/* report any interrupts to som */
 	if (ACC_INT) {
 		SomEnable();
 		somSetInt(INT_SRC_ACCEL);

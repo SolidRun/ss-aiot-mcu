@@ -42,7 +42,7 @@
 /* USER CODE BEGIN PTD */
 extern volatile bool sensors_ready;
 volatile uint8_t IR_INT;
-volatile bool ACC_INT;
+volatile uint8_t ACC_INT;
 volatile uint8_t MCU_INT;
 volatile bool gps_time_synced = false;      // GPS time was successfully synchronized
 volatile bool gps_time_sync_request = false; // Request to try GPS time synchronization
