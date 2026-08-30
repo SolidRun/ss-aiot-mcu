@@ -47,10 +47,40 @@ TBD.
 System Controller must be described as a sub-node below an i2c bus exactly as shown below, all properties are mandatory:
 
 ```c
-system-controller@18 {
+sc: system-controller@18 {
 	compatible = "solidrun,solidsense-aiot-system-controller";
 	reg = <0x18>;
 	interrupts-extended = <&pinctrl RZG2L_GPIO(5, 6) IRQ_TYPE_LEVEL_LOW>;
 };
+```
 
 Note IRQ pin must enable integrated pullup in pinconfig!
+
+Optional properties:
+
+- `monitored-battery` phandle to support capacity reporting from an ocv table.
+  There is no temperature sensor, use fixed 20°C.
+
+  Generic example for single cell type 18650 3.7V nominal and 2500mAh (LiCoO2):
+  ```c
+  / {
+  	bat: battery {
+  		compatible = "simple-battery";
+  		factory-internal-resistance-micro-ohms = <100000>;
+  		ocv-capacity-celsius = <20>;
+  		ocv-capacity-table-0 = <4200000 100>, <4150000 95>, <4110000 90>,
+  				       <4080000  85>, <4020000 80>, <3980000 75>,
+  				       <3950000  70>, <3910000 65>, <3870000 60>,
+  				       <3850000  55>, <3840000 50>, <3820000 45>,
+  				       <3800000  40>, <3790000 35>, <3770000 30>,
+  				       <3750000  25>, <3730000 20>, <3710000 15>,
+  				       <3690000  10>, <3610000  5>, <3000000  0>;
+  	};
+  };
+
+  &sc {
+  	monitored-battery = <&bat>;
+  };
+  ```
+
+  All battery properties shown in example must be specified to enable capacity reporting.

@@ -14,6 +14,9 @@ ssaiot-sc-gnss-y := gnss.o
 obj-m += ssaiot-sc-rtc.o
 ssaiot-sc-rtc-y := rtc.o
 
+obj-m += ssaiot-sc-charger.o
+ssaiot-sc-charger-y := charger.o
+
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 PWD := $(CURDIR)
 
