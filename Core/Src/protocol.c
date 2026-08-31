@@ -107,22 +107,17 @@ void Sensor_Alarm_Config(uint8_t *cmd_data, uint8_t data_len, uint8_t *status)
 
 /* 0x12 0x08 - report the armed alarm.
  *
- * data[0] is 1 when an alarm is armed and 0 when it is not. The three time bytes
- * are meaningful only when it is 1, and read zero otherwise.
- *
- * This is the only way for the master to learn what is armed after its own
- * reboot or after the MCU's: the alarm lives in the backup domain and outlives
- * both. */
+ * STATUS is 0 when an alarm is set and armed.
+ * STATUS is 1 when no alarm is active or was never set.
+ */
 void Sensor_Alarm_Read(uint8_t *data, uint8_t *len, uint8_t *status)
 {
-	uint8_t h = 0, m = 0, s = 0;
+	*len = 3;
 
-	*len = 4;
-	*status = 0;
-	data[0] = rtc_getAlarm(&h, &m, &s) ? 1U : 0U;
-	data[1] = h;
-	data[2] = m;
-	data[3] = s;
+    if (rtc_getAlarm(&data[0], &data[1], &data[2]))
+        *status = 0;
+    else
+        *status = 1;
 }
 
 void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {

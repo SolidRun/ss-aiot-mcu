@@ -213,7 +213,7 @@ Multi-byte values are little-endian unless stated otherwise.
 | Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,4,{SOURCES, IR, ACC, RTC}}            |
 | Set daily alarm                | {0x13,0x08,0x03,{HH,MM,SS}} | {0x00,0x00,{}}                         |
 | Cancel alarm                   | {0x11,0x08,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,4,{armed,HH,MM,SS}}                  |
+| Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,3,{HH,MM,SS}}                        |
 
 Notes on individual commands:
 
@@ -243,9 +243,9 @@ Notes on individual commands:
   `Read armed alarm` to find out.
 - **Cancel alarm** is `Turn OFF` on the alarm sensor ID. There is no magic time
   value that means "cancel", so `00:00:00` is settable like any other time.
-- **Read armed alarm** returns `1` in the first byte when an alarm is armed and
-  `0` when it is not. The three time bytes are meaningful only in the first case
-  and read zero in the second.
+- **Read armed alarm** reports the time of an armed alarm, if any.
+  `STATUS = 0x01` means no alarm is currently armed, and the time bytes that follow
+  are without meaning.
 - **Read interrupt status** is described in full under
   [What the interrupt status register contains](#what-the-interrupt-status-register-contains).
   It is the only command that clears interrupt state, and the only one that releases
@@ -293,7 +293,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x05` (battery) | 9 | five I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
 | `0x12,0x07` (interrupt status) | 6 | immediate — snapshots RAM latches, no bus access |
-| `0x12,0x08` (armed alarm) | 6 | immediate |
+| `0x12,0x08` (armed alarm) | 5 | immediate |
 | `0x11,0x08` (cancel alarm) | 2 | immediate |
 | `0x13,*` (config) | 2 | IR/ACC re-init: several I2C1 writes; alarm: immediate |
 
