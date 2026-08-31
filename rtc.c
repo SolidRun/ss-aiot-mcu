@@ -32,6 +32,7 @@ struct ssaiot_sc_rtc_alarm {
 struct ssaiot_sc_rtc {
 	struct ssaiot_sc_priv *sc;
 	struct rtc_device *rtc;
+	int irq;
 };
 
 /**
@@ -213,7 +214,7 @@ static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct ssaiot_sc_rtc *rtc;
-	int irq, ret;
+	int ret;
 
 	/* the mfd cell has no dedicated dt node, reuse parent */
 	dev->of_node = dev->parent->of_node;
@@ -235,12 +236,12 @@ static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 	rtc->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
 	rtc->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
-	irq = platform_get_irq_byname(pdev, "alarm");
-	if (irq < 0)
-		return irq;
+	rtc->irq = platform_get_irq_byname(pdev, "alarm");
+	if (rtc->irq < 0)
+		return rtc->irq;
 
 	/* request threaded irq to allow long i2c transfers while processing */
-	ret = devm_request_threaded_irq(dev, irq, NULL, ssaiot_sc_rtc_irq,
+	ret = devm_request_threaded_irq(dev, rtc->irq, NULL, ssaiot_sc_rtc_irq,
 					IRQF_ONESHOT, dev_name(dev), rtc);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to request alarm irq.\n");
@@ -249,6 +250,33 @@ static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 
 	return devm_rtc_register_device(rtc->rtc);
 }
+
+static int ssaiot_sc_rtc_suspend(struct device *dev)
+{
+	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
+
+	/* check if device is set as wakeup source */
+	if (!device_may_wakeup(dev))
+		return 0;
+
+	/* enable irq wakeup */
+	return enable_irq_wake(rtc->irq);
+}
+
+static int ssaiot_sc_rtc_resume(struct device *dev)
+{
+	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
+
+	/* check if device was set as wakeup source */
+	if (!device_may_wakeup(dev))
+		return 0;
+
+	/* disable irq wakeup */
+	return disable_irq_wake(rtc->irq);
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(ssaiot_sc_rtc_pm_ops, ssaiot_sc_rtc_suspend,
+				ssaiot_sc_rtc_resume);
 
 /*
  * The id must match the MFD cell name and is capped at PLATFORM_NAME_SIZE,
@@ -264,6 +292,7 @@ MODULE_DEVICE_TABLE(platform, ssaiot_sc_rtc_id_table);
 static struct platform_driver ssaiot_sc_rtc_driver = {
 	.driver = {
 		.name = "solidsense-aiot-system-controller-rtc",
+		.pm = pm_sleep_ptr(&ssaiot_sc_rtc_pm_ops),
 	},
 	.probe = ssaiot_sc_rtc_probe,
 	.id_table = ssaiot_sc_rtc_id_table,
