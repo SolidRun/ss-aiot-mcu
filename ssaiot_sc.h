@@ -32,6 +32,7 @@
 #define SSAIOT_SC_SENSOR_RTC		0x06
 #define SSAIOT_SC_SENSOR_INTERRUPTS	0x07
 #define SSAIOT_SC_SENSOR_ALARM		0x08
+#define SSAIOT_SC_SENSOR_SOM		0x09
 
 struct ssaiot_sc_priv {
 	struct device *dev;

@@ -5,14 +5,46 @@
  * Copyright (C) 2026 Josua Mayer <josua@solid-run.com>
  */
 
+#include <linux/delay.h>
 #include <linux/i2c.h>
+#include <linux/reboot.h>
 #include <linux/version.h>
 
 #include "ssaiot_sc.h"
 
+/* controller cuts power after 1 second */
+#define SSAIOT_SC_POWEROFF_DELAY_MS	1000
+
 static void ssaiot_sc_destroy_wq(void *data)
 {
 	destroy_workqueue(data);
+}
+
+static int ssaiot_sc_power_off(struct sys_off_data *data)
+{
+	struct ssaiot_sc_priv *priv = data->cb_data;
+	u8 status;
+	int ret;
+
+	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_OFF,
+			     SSAIOT_SC_SENSOR_SOM, NULL, 0, NULL, 0, &status);
+	if (ret) {
+		dev_emerg(priv->dev, "Failed to request power-off: %d\n", ret);
+		return NOTIFY_DONE;
+	}
+
+	if (status != SSAIOT_SC_STATUS_OK) {
+		/* error status means controller encountered internal error or bug */
+		dev_emerg(priv->dev, "Controller refused power-off, status 0x%02x.\n", status);
+		return NOTIFY_DONE;
+	}
+
+	/* wait with margin for power-off */
+	mdelay(2 * SSAIOT_SC_POWEROFF_DELAY_MS);
+
+	dev_emerg(priv->dev, "Controller accepted power-off request, but power is still on.\n");
+
+	return NOTIFY_DONE;
 }
 
 static int ssaiot_sc_probe(struct i2c_client *client)
@@ -53,6 +85,15 @@ static int ssaiot_sc_probe(struct i2c_client *client)
 	ret = ssaiot_sc_mfd_probe(priv->dev);
 	if (ret)
 		return ret;
+
+	/* register power-off handler at high priority, to trigger before psci (normal priority) */
+	if (of_device_is_system_power_controller(dev_of_node(priv->dev))) {
+		ret = devm_register_sys_off_handler(priv->dev, SYS_OFF_MODE_POWER_OFF,
+						    SYS_OFF_PRIO_HIGH, ssaiot_sc_power_off, priv);
+		if (ret)
+			return dev_err_probe(priv->dev, ret,
+					     "Failed to register power-off handler.\n");
+	}
 
 	dev_info(priv->dev, "SolidSense AIOT System Controller probed.\n");
 

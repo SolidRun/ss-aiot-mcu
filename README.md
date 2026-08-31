@@ -84,3 +84,8 @@ Optional properties:
   ```
 
   All battery properties shown in example must be specified to enable capacity reporting.
+
+- `system-power-controller` marks the controller as the board's power-off method, cutting power on shutdown.
+
+  There is no power button, only the controller can re-enable power
+  based on sensor configuration, rtc or on controller reset.
