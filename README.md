@@ -40,7 +40,28 @@ change to the transport is required.
 
 The below drivers are already implemented:
 
-TBD.
+### GNSS
+
+The GNSS device driver supplies raw NMEA records via generic `/dev/gnss0` device-node,
+for use with standard linux gps software such as [gpsd](https://gpsd.gitlab.io/gpsd/).
+
+For basic testing use `gpsmon`, `cgps`, or `cat /dev/gnss0`.
+
+### Charger
+
+The charger driver can monitor external dc supply and a range of standard batteries.
+The system controller reference firmware is configured for single cell type 18650 (LiCoO2).
+
+Charger and battery status can be queried using `upower -d` command.
+
+### RTC
+
+The RTC supports read-only time based on GNSS, and wake on alarm.
+
+Read the current time using `hwclock -f /dev/rtc0 -r`, this succeeds as soon as the system controller has synced time with GNSS at least once.
+
+For wake on alarm, use ` rtcwake` command.
+For example to shutdown and restart after 5 minutes: `rtcwake -m off -s 300`
 
 ## Device-Tree Binding
 
