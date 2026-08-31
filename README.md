@@ -214,6 +214,7 @@ Multi-byte values are little-endian unless stated otherwise.
 | Set daily alarm                | {0x13,0x08,0x03,{HH,MM,SS}} | {0x00,0x00,{}}                         |
 | Cancel alarm                   | {0x11,0x08,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,3,{HH,MM,SS}}                        |
+| Turn OFF SoM                   | {0x11,0x09,0x00,{}}     | {0x00,0x00,{}}                             |
 
 Notes on individual commands:
 
@@ -277,7 +278,10 @@ Notes on individual commands:
   This command is **not** required for the MCU to know the time. The MCU syncs
   itself from GNSS with no involvement from the master; the command exists to
   force it early.
-- **Turn ON / Turn OFF** are implemented for `SENSOR_LED` only.
+- **Turn ON** is implemented for `SENSOR_LED` only.
+- **Turn OFF** is implemented for both `SENSOR_LED` and `SoM` (CPU).
+- **Turn OFF SoM** must cut power unless fatal internal error occured, since it is too late for host to reconsider.
+  Cutting power must be delayed by 1s after i2c response, giving sufficient time for host to process final interrupts.
 
 ### 2.3 Response Lengths:
 
@@ -295,6 +299,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x07` (interrupt status) | 6 | immediate — snapshots RAM latches, no bus access |
 | `0x12,0x08` (armed alarm) | 5 | immediate |
 | `0x11,0x08` (cancel alarm) | 2 | immediate |
+| `0x11,0x09` (power-off som) | 2 | response immediate, power-off after 1s |
 | `0x13,*` (config) | 2 | IR/ACC re-init: several I2C1 writes; alarm: immediate |
 
 ### 2.4 GPS NMEA Passthrough:

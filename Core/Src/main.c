@@ -63,6 +63,10 @@ volatile bool gps_time_sync_request = false; // Request to try GPS time synchron
 
 /* USER CODE BEGIN PV */
 
+/* SoM power-off internal state, accessed from i2c irq and main */
+static volatile bool     som_off_pending  = false;
+static volatile uint32_t som_off_deadline = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,6 +98,17 @@ void SomEnable(void) {
 void SomDisable(void) {
     HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, GPIO_PIN_RESET);
 }
+
+/*
+ * Delayed power-off for SoM:
+ *
+ * Pass delay in ms, cannot be canceled, processed in main.
+ */
+void SomScheduleOff(uint16_t delay_ms) {
+  som_off_deadline = HAL_GetTick() + delay_ms;
+  som_off_pending  = true;
+}
+
 
 /* Record an interrupt source and assert the line to the SOM.
  */
@@ -259,6 +274,16 @@ int main(void)
 		 gps_time_synced = false;
 		 gps_time_sync_request = false;
 	 }
+
+    /* process scheduled SoM power-off */
+    if (som_off_pending) {
+      /* distance in ms between current time and deadline: negative = deadline in future, positive = deadline in past */
+      int32_t distance = HAL_GetTick() - som_off_deadline;
+      if (distance >= 0) {
+        som_off_pending = false;
+        SomDisable();
+      }
+    }
 
 	 HAL_Delay(1);
     /* USER CODE END WHILE */

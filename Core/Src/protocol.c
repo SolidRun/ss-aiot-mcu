@@ -202,6 +202,10 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
                 Sensor_LED_Off();
             } else if (cmd->sensor_id == SENSOR_ALARM) {
                 rtc_cancelAlarm();
+            } else if (cmd->sensor_id == SENSOR_SOM) {
+                /* schedule power-off after 1s */
+                SomScheduleOff(1000);
+                /* status is success (master can't process failure during shutdown anyhow) */
             }
             break;
 
