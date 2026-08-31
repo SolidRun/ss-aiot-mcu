@@ -60,15 +60,27 @@ static const struct {
 	[SSAIOT_SC_IRQ_RTC_ALARM]   = { SSAIOT_SC_INT_RTC, SSAIOT_SC_RTC_ALARM_A },
 };
 
+/* forward set_wake to the parent */
+static int ssaiot_sc_irq_set_wake(struct irq_data *d, unsigned int on)
+{
+	struct ssaiot_sc_priv *priv = irq_data_get_irq_chip_data(d);
+
+	return irq_set_irq_wake(priv->irq, on);
+}
+
 /*
  * The controller has no interrupt mask registers - a source is either reported
- * by the interrupt read or it is not - so the chip implements no callbacks at
- * all. mask_irq() and unmask_irq() skip an absent handler, and disable_irq()
- * still takes effect because it sets IRQD_IRQ_DISABLED itself, which is what
- * handle_nested_irq() tests before running the action.
+ * by the interrupt read or it is not - so the chip implements no mask
+ * callbacks. mask_irq() and unmask_irq() skip an absent handler, and
+ * disable_irq() still takes effect because it sets IRQD_IRQ_DISABLED itself,
+ * which is what handle_nested_irq() tests before running the action.
+ *
+ * Wake-up is the one thing the chip has to act on, since the hardware that
+ * carries it belongs to the parent rather than to any single source.
  */
 static struct irq_chip ssaiot_sc_irq_chip = {
 	.name = "ssaiot-sc",
+	.irq_set_wake = ssaiot_sc_irq_set_wake,
 };
 
 static int ssaiot_sc_irq_map(struct irq_domain *d, unsigned int virq,
@@ -78,13 +90,14 @@ static int ssaiot_sc_irq_map(struct irq_domain *d, unsigned int virq,
 
 	/*
 	 * handle_nested_irq() invokes the action directly, so there is no flow
-	 * handler, and the chip declares no callbacks that could read chip data.
+	 * handler. The chip data is what set_wake reads to find the parent.
 	 *
 	 * The parent has to be recorded: irq_sw_resend() refuses to replay a
 	 * pending interrupt on a nested thread whose desc has no parent_irq, so
 	 * without it an event latched while a sub-device had its IRQ disabled
 	 * would be dropped instead of resent on enable_irq().
 	 */
+	irq_set_chip_data(virq, priv);
 	irq_set_chip(virq, &ssaiot_sc_irq_chip);
 	irq_set_nested_thread(virq, 1);
 	irq_set_parent(virq, priv->irq);
