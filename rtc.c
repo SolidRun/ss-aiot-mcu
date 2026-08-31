@@ -5,6 +5,7 @@
  * Copyright (C) 2026 Josua Mayer <josua@solid-run.com>
  */
 
+#include <linux/interrupt.h>
 #include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/rtc.h>
@@ -21,6 +22,18 @@ struct ssaiot_sc_rtc_time {
 	u8 sec;
 } __packed;
 
+/* Payload of CMD_SENSOR_(CONFIG/READ) / SENSOR_ALARM, binary and 24 hour */
+struct ssaiot_sc_rtc_alarm {
+	u8 hour;
+	u8 min;
+	u8 sec;
+} __packed;
+
+struct ssaiot_sc_rtc {
+	struct ssaiot_sc_priv *sc;
+	struct rtc_device *rtc;
+};
+
 /**
  * ssaiot_sc_rtc_read_time() - Read the controller's calendar
  * @dev: The RTC sub-device
@@ -32,13 +45,14 @@ struct ssaiot_sc_rtc_time {
  */
 static int ssaiot_sc_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
-	struct ssaiot_sc_priv *sc = dev_get_drvdata(dev->parent);
+	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
 	struct ssaiot_sc_rtc_time resp;
 	u8 status;
 	int ret;
 
-	ret = ssaiot_sc_xfer(sc, SSAIOT_SC_CMD_SENSOR_READ, SSAIOT_SC_SENSOR_RTC,
-			     NULL, 0, (u8 *)&resp, sizeof(resp), &status);
+	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_READ,
+			     SSAIOT_SC_SENSOR_RTC, NULL, 0,
+			     (u8 *)&resp, sizeof(resp), &status);
 	if (ret)
 		return ret;
 
@@ -64,34 +78,176 @@ static int ssaiot_sc_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
+static int ssaiot_sc_rtc_alarm_cancel(struct ssaiot_sc_rtc *rtc)
+{
+	u8 status;
+	int ret;
+
+	/* cancelling is its own command, not a magic time */
+	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_OFF,
+			     SSAIOT_SC_SENSOR_ALARM, NULL, 0, NULL, 0, &status);
+	if (ret)
+		return ret;
+
+	return status == SSAIOT_SC_STATUS_OK ? 0 : -EIO;
+}
+
+static int ssaiot_sc_rtc_alarm_arm(struct ssaiot_sc_rtc *rtc,
+				   const struct ssaiot_sc_rtc_alarm *time)
+{
+	u8 status;
+	int ret;
+
+	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_CONFIG,
+			     SSAIOT_SC_SENSOR_ALARM, (const u8 *)time,
+			     sizeof(*time), NULL, 0, &status);
+	if (ret)
+		return ret;
+
+	/* the controller range checks the fields and rejects the whole command */
+	if (status != SSAIOT_SC_STATUS_OK)
+		return -EINVAL;
+
+	return 0;
+}
+
+/* read active (armed) alarm, if any */
+static int ssaiot_sc_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
+{
+	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
+	time64_t now_secs, alarm_secs;
+	struct ssaiot_sc_rtc_alarm resp;
+	struct rtc_time now;
+	u8 status;
+	int ret;
+
+	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_READ,
+			     SSAIOT_SC_SENSOR_ALARM, NULL, 0,
+			     (u8 *)&resp, sizeof(resp), &status);
+	if (ret)
+		return ret;
+
+	if (status != SSAIOT_SC_STATUS_OK) {
+		/* no active alarm */
+		alrm->enabled = 0;
+		return 0;
+	}
+
+	/* read current date&time */
+	ret = ssaiot_sc_rtc_read_time(dev, &now);
+	if (ret == -EINVAL) {
+		/* Special case time not yet set, meaning the next alarm date is unknown. */
+		dev_warn(dev, "failed to read date for active alarm, alarm is not tracked\n");
+		alrm->enabled = 0;
+		return 0;
+	} else if (ret) {
+		return ret;
+	}
+	now_secs = rtc_tm_to_time64(&now);
+
+	/* alarm time is without date, calculate today's occurrence */
+	alarm_secs = now_secs;
+	alarm_secs -= now_secs % 86400;
+	alarm_secs += resp.hour * 3600;
+	alarm_secs += resp.min * 60;
+	alarm_secs += resp.sec;
+
+	/* if today's alarm has passed, roll tomorrow */
+	if (alarm_secs <= now_secs)
+		alarm_secs += 86400;
+
+	/* convert to rtc_time */
+	rtc_time64_to_tm(alarm_secs, &alrm->time);
+
+	/* alarms are always armed */
+	alrm->enabled = 1;
+
+	return 0;
+}
+
+static int ssaiot_sc_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
+{
+	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
+	struct ssaiot_sc_rtc_alarm time;
+
+	time.hour = alrm->time.tm_hour;
+	time.min = alrm->time.tm_min;
+	time.sec = alrm->time.tm_sec;
+
+	return ssaiot_sc_rtc_alarm_arm(rtc, &time);
+}
+
+static int ssaiot_sc_rtc_alarm_irq_enable(struct device *dev,
+					  unsigned int enabled)
+{
+	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
+
+	if (enabled)
+		/* set_alarm already armed interrupt, nothing left to do */
+		return 0;
+
+	return ssaiot_sc_rtc_alarm_cancel(rtc);
+}
+
 /*
- * Read only: the host has no path into the controller's calendar, so there is
- * no set_time. Without set_alarm the RTC core clears RTC_FEATURE_ALARM for us,
- * so no alarm interface is offered either.
+ * No set_time: the host has no path into the controller's calendar, which is
+ * set from GNSS alone.
  */
 static const struct rtc_class_ops ssaiot_sc_rtc_ops = {
 	.read_time = ssaiot_sc_rtc_read_time,
+	.read_alarm = ssaiot_sc_rtc_read_alarm,
+	.set_alarm = ssaiot_sc_rtc_set_alarm,
+	.alarm_irq_enable = ssaiot_sc_rtc_alarm_irq_enable,
 };
+
+static irqreturn_t ssaiot_sc_rtc_irq(int irq, void *data)
+{
+	struct ssaiot_sc_rtc *rtc = data;
+
+	rtc_update_irq(rtc->rtc, 1, RTC_AF | RTC_IRQF);
+
+	return IRQ_HANDLED;
+}
 
 static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct rtc_device *rtc;
+	struct ssaiot_sc_rtc *rtc;
+	int irq, ret;
 
 	/* the mfd cell has no dedicated dt node, reuse parent */
 	dev->of_node = dev->parent->of_node;
 
-	rtc = devm_rtc_allocate_device(dev);
-	if (IS_ERR(rtc))
-		return PTR_ERR(rtc);
+	rtc = devm_kzalloc(dev, sizeof(*rtc), GFP_KERNEL);
+	if (!rtc)
+		return -ENOMEM;
 
-	rtc->ops = &ssaiot_sc_rtc_ops;
+	rtc->sc = dev_get_drvdata(dev->parent);
+	platform_set_drvdata(pdev, rtc);
+
+	rtc->rtc = devm_rtc_allocate_device(dev);
+	if (IS_ERR(rtc->rtc))
+		return PTR_ERR(rtc->rtc);
+
+	rtc->rtc->ops = &ssaiot_sc_rtc_ops;
 
 	/* the calendar carries a two digit year against a 2000 epoch */
-	rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
-	rtc->range_max = RTC_TIMESTAMP_END_2099;
+	rtc->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
+	rtc->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
-	return devm_rtc_register_device(rtc);
+	irq = platform_get_irq_byname(pdev, "alarm");
+	if (irq < 0)
+		return irq;
+
+	/* request threaded irq to allow long i2c transfers while processing */
+	ret = devm_request_threaded_irq(dev, irq, NULL, ssaiot_sc_rtc_irq,
+					IRQF_ONESHOT, dev_name(dev), rtc);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to request alarm irq.\n");
+
+	device_init_wakeup(dev, true);
+
+	return devm_rtc_register_device(rtc->rtc);
 }
 
 /*

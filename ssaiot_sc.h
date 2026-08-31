@@ -31,6 +31,7 @@
 #define SSAIOT_SC_SENSOR_CHARGER	0x05
 #define SSAIOT_SC_SENSOR_RTC		0x06
 #define SSAIOT_SC_SENSOR_INTERRUPTS	0x07
+#define SSAIOT_SC_SENSOR_ALARM		0x08
 
 struct ssaiot_sc_priv {
 	struct device *dev;
