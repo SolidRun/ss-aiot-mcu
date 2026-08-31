@@ -142,6 +142,9 @@ static int ssaiot_sc_gnss_probe(struct platform_device *pdev)
 	struct gnss_device *gdev;
 	int ret;
 
+	/* the mfd cell has no dedicated dt node, reuse parent */
+	dev->of_node = dev->parent->of_node;
+
 	gnss = devm_kzalloc(dev, sizeof(*gnss), GFP_KERNEL);
 	if (!gnss)
 		return -ENOMEM;

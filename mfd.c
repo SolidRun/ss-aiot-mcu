@@ -24,6 +24,8 @@ static const struct resource ssaiot_sc_acc_resources[] = {
  * One cell per logical function of the controller. Sub-devices reach the
  * transport with dev_get_drvdata(pdev->dev.parent) and address their own
  * function through the matching SSAIOT_SC_SENSOR_* id.
+ *
+ * All cells share the parent firmware node for dt property access.
  */
 static const struct mfd_cell ssaiot_sc_cells[] = {
 	{

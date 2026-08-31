@@ -78,6 +78,9 @@ static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct rtc_device *rtc;
 
+	/* the mfd cell has no dedicated dt node, reuse parent */
+	dev->of_node = dev->parent->of_node;
+
 	rtc = devm_rtc_allocate_device(dev);
 	if (IS_ERR(rtc))
 		return PTR_ERR(rtc);
