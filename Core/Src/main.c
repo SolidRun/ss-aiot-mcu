@@ -86,17 +86,16 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 
 }
 
-
 // Enable VIN_SOM_EN
 void SomEnable(void) {
-    //HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, GPIO_PIN_SET);
-    I2C_Slave_Init();
-
+    /* regulator enable pin is active-low, low = on */
+    HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, GPIO_PIN_RESET);
 }
 
 // Disable VIN_SOM_EN
 void SomDisable(void) {
-    HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, GPIO_PIN_RESET);
+    /* regulator enable pin is active-low, high = off */
+    HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, GPIO_PIN_SET);
 }
 
 /*
@@ -151,7 +150,8 @@ void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc, uint8_t *rtc)
 void resetI2C2(void){
 	HAL_I2C_DeInit(&hi2c2);
 	MX_I2C2_Init();
-	SomEnable();
+	/* re-arm slave after deinit&init */
+	I2C_Slave_Init();
 }
 
 
@@ -200,6 +200,9 @@ int main(void)
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
+  /* change som-enable pin from input to output following initial electrical state */
+  GPIO_InitSomEnablePin();
+
   /* Alarm A can be armed from a previous power cycle - by this firmware, or by
    * the CubeMX block in MX_RTC_Init() on the board's very first boot. Sort out
    * which before anything can raise an interrupt. */
@@ -219,7 +222,10 @@ int main(void)
    * keeps an edge from reaching a driver that has no bus IO registered yet. */
   GPIO_EnableSensorInterrupts();
 
-  SomEnable();
+  /* Arm the i2c slave */
+  I2C_Slave_Init();
+
+  // mcu (re-)start should notify SoM, but not modify current power-state
   somSetInt(INT_SRC_MCU);
   HAL_TIM_Base_Start_IT(&htim6);
   UBlox_Init();          /* discard the GNSS backlog */

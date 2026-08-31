@@ -283,6 +283,8 @@ Notes on individual commands:
 - **Turn OFF SoM** must cut power unless fatal internal error occured, since it is too late for host to reconsider.
   Cutting power must be delayed by 1s after i2c response, giving sufficient time for host to process final interrupts.
 
+  Initial power-state follows pull-up/pull-down assembly options: R111 assembled = default on, R13 assembled = default off.
+
 ### 2.3 Response Lengths:
 
 Total bytes the master should read (`2 + DATA_LEN`):

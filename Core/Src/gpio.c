@@ -50,7 +50,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPS_RSTN_Pin|BATT_QON_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, BATT_CE_Pin|SOM_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, BATT_CE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GNSS_PWR_EN_Pin|MCU_INT_Pin, GPIO_PIN_SET);
@@ -64,14 +64,14 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : GNSS_GPS1PPS_Pin GPS_INT_Pin BATT_STAT_Pin */
-  GPIO_InitStruct.Pin = GNSS_GPS1PPS_Pin|GPS_INT_Pin|BATT_STAT_Pin;
+  /*Configure GPIO pins : GNSS_GPS1PPS_Pin GPS_INT_Pin SOM_EN_Pin BATT_STAT_Pin */
+  GPIO_InitStruct.Pin = GNSS_GPS1PPS_Pin|GPS_INT_Pin|SOM_EN_Pin|BATT_STAT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : GPS_RSTN_Pin BATT_CE_Pin BATT_QON_Pin SOM_EN_Pin */
-  GPIO_InitStruct.Pin = GPS_RSTN_Pin|BATT_CE_Pin|BATT_QON_Pin|SOM_EN_Pin;
+  /*Configure GPIO pins : GPS_RSTN_Pin BATT_CE_Pin BATT_QON_Pin */
+  GPIO_InitStruct.Pin = GPS_RSTN_Pin|BATT_CE_Pin|BATT_QON_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -120,6 +120,22 @@ void GPIO_EnableSensorInterrupts(void)
 {
   sensors_ready = true;
   __HAL_GPIO_EXTI_GENERATE_SWIT(IR_SENS_INT_Pin|_6AX_INT_Pin);
+}
+
+void GPIO_InitSomEnablePin(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_PinState state = HAL_GPIO_ReadPin(SOM_EN_GPIO_Port, SOM_EN_Pin);
+
+    /* on init logical state follows electrical state (i.e. follow assembled pull-up/-down) */
+    HAL_GPIO_WritePin(SOM_EN_GPIO_Port, SOM_EN_Pin, state);
+
+    /* set output */
+    GPIO_InitStruct.Pin   = SOM_EN_Pin;
+    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(SOM_EN_GPIO_Port, &GPIO_InitStruct);
 }
 
 /* USER CODE END 2 */
