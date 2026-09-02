@@ -8,17 +8,23 @@ extern volatile uint8_t ACC_INT;
 // Static accelerometer object
 static ISM330DHCX_Object_t ism330dhcx;
 #define ACC_THS_DEFAULT  0x04
+#define ACC_I2C_TIMEOUT_MS   100U
 uint8_t acc_ths = ACC_THS_DEFAULT;
 
 
 // I2C write function for driver
 static int32_t ACC_I2C_Write(uint16_t handle, uint16_t Reg, uint8_t *Data, uint16_t Len) {
-    return (HAL_I2C_Mem_Write(&hi2c1, 0xD5, Reg, I2C_MEMADD_SIZE_8BIT, Data, Len, HAL_MAX_DELAY) == HAL_OK) ? 0 : -1;
+    return (HAL_I2C_Mem_Write(&hi2c1, 0xD5, Reg, I2C_MEMADD_SIZE_8BIT, Data, Len, ACC_I2C_TIMEOUT_MS) == HAL_OK) ? 0 : -1;
 }
 
 // I2C read function for driver
 static int32_t ACC_I2C_Read(uint16_t handle, uint16_t Reg, uint8_t *Data, uint16_t Len) {
-    return (HAL_I2C_Mem_Read(&hi2c1, 0xD5, Reg, I2C_MEMADD_SIZE_8BIT, Data, Len, HAL_MAX_DELAY) == HAL_OK) ? 0 : -1;
+    return (HAL_I2C_Mem_Read(&hi2c1, 0xD5, Reg, I2C_MEMADD_SIZE_8BIT, Data, Len, ACC_I2C_TIMEOUT_MS) == HAL_OK) ? 0 : -1;
+}
+
+static int32_t ACC_GetTick(void)
+{
+    return (int32_t)HAL_GetTick();
 }
 
 // Initialize the accelerometer
@@ -29,7 +35,7 @@ int ACC_Init(void) {
     io_ctx.Address = ISM330DHCX_I2C_ADD_L; // SA0 tied to VCC
     io_ctx.Init = NULL;
     io_ctx.DeInit = NULL;
-    io_ctx.GetTick = HAL_GetTick;
+    io_ctx.GetTick = ACC_GetTick;
     io_ctx.Delay = HAL_Delay;
     io_ctx.WriteReg = ACC_I2C_Write;
     io_ctx.ReadReg = ACC_I2C_Read;
@@ -90,18 +96,19 @@ int ACC_ReadAxes(ISM330DHCX_Axes_t *axes) {
  */
 int ACC_CheckWakeUp(void)
 {
-    ism330dhcx_all_sources_t src;
+    ism330dhcx_wake_up_src_t src;
 
-    if (ism330dhcx_all_sources_get(&ism330dhcx.Ctx, &src) != ISM330DHCX_OK) {
+    if (ism330dhcx_read_reg(&ism330dhcx.Ctx, ISM330DHCX_WAKE_UP_SRC,
+                            (uint8_t *)&src, 1) != ISM330DHCX_OK) {
         return -1;
     }
 
-    return (int)( src.wake_up_src.z_wu
-              | (src.wake_up_src.y_wu             << 1)
-              | (src.wake_up_src.x_wu             << 2)
-              | (src.wake_up_src.wu_ia            << 3)
-              | (src.wake_up_src.ff_ia            << 5)
-              | (src.wake_up_src.sleep_change_ia  << 6));
+    return (int)( src.z_wu
+              | (src.y_wu            << 1)
+              | (src.x_wu            << 2)
+              | (src.wu_ia           << 3)
+              | (src.ff_ia           << 5)
+              | (src.sleep_change_ia << 6));
 }
 
 int ACC_getInt()

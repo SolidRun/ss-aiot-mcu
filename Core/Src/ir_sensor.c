@@ -16,6 +16,7 @@ extern I2C_HandleTypeDef hi2c1;  // CubeMX I2C handle
 //------------------------------------------------------------------------------
 static stmdev_ctx_t ir_sensor_ctx;
 #define IR_THS_DEFAULT  1000U
+#define IR_I2C_TIMEOUT_MS   100U
 uint16_t ir_ths = IR_THS_DEFAULT;
 
 //------------------------------------------------------------------------------
@@ -24,13 +25,13 @@ uint16_t ir_ths = IR_THS_DEFAULT;
 static int32_t ir_sensor_write(void *handle, uint8_t reg, const uint8_t *data, uint16_t len)
 {
     return (int32_t)HAL_I2C_Mem_Write(handle, STHS34PF80_I2C_ADD, reg,
-                                      I2C_MEMADD_SIZE_8BIT, (uint8_t*)data, len, HAL_MAX_DELAY);
+                                      I2C_MEMADD_SIZE_8BIT, (uint8_t*)data, len, IR_I2C_TIMEOUT_MS);
 }
 
 static int32_t ir_sensor_read(void *handle, uint8_t reg, uint8_t *data, uint16_t len)
 {
 	HAL_StatusTypeDef status = HAL_I2C_Mem_Read(handle, STHS34PF80_I2C_ADD, reg,
-                                     I2C_MEMADD_SIZE_8BIT, data, len, HAL_MAX_DELAY);
+                                     I2C_MEMADD_SIZE_8BIT, data, len, IR_I2C_TIMEOUT_MS);
 	return (status);
 }
 
