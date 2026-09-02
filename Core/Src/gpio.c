@@ -50,7 +50,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPS_RSTN_Pin|BATT_QON_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, BATT_CE_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BATT_CE_GPIO_Port, BATT_CE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GNSS_PWR_EN_Pin|MCU_INT_Pin, GPIO_PIN_SET);
@@ -104,10 +104,10 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(BATT_PG_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 
 }
