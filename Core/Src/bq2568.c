@@ -128,7 +128,7 @@ HAL_StatusTypeDef BQ25638_GetStatus(BQ25638_Status_t *out) {
         out->flags |= BQ25638_FLAG_MAINS_FAULT;
 
     /* check if battery has fault (dead or over-voltage) */
-    if (fault_status & BQ25638_REG_FAULT_STATUS__VBUS_FAULT_STAT)
+    if (fault_status & BQ25638_REG_FAULT_STATUS__BAT_FAULT_STAT)
         out->flags |= BQ25638_FLAG_BAT_FAULT;
 
     /* read adc ibat register */
@@ -242,7 +242,7 @@ HAL_StatusTypeDef BQ25638_Init(void) {
     if (status != HAL_OK)
         return status;
 
-    BQ25638_EnableAdc(1);
+    status = BQ25638_EnableAdc(1);
     if (status != HAL_OK)
         return status;
 
