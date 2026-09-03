@@ -46,5 +46,16 @@ int ACC_EnableDRDY(void);
 int ACC_getInt();
 void ACC_clearInt();
 void ACC_HandleInt();
+
+/* Take a fresh sample into the axis cache. This is a bus operation - only
+ * ever called from the _6AX_INT EXTI handler. */
+int ACC_RefreshAxes(void);
+
+/* Serve the cached sample - xyz in mg, temp_c100 in hundredths of a degree
+ * Celsius. Touches no bus. The return value is the protocol status byte:
+ *   0 = the sample is no older than a second
+ *   1 = nothing has ever been sampled, both outputs untouched
+ *   2 = a real sample, but an older one */
+int ACC_GetCachedAxes(int16_t *xyz, int16_t *temp_c100);
 #endif
 

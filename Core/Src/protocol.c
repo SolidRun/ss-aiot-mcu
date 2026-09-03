@@ -32,14 +32,33 @@ void Sensor_LED_Read(uint8_t *data, uint8_t *len, uint8_t *status){
 	}
 }
 
+/* Response is six bytes, every field int16 little-endian:
+ *
+ *   | Byte | Field    | Encoding                                  |
+ *   |------|----------|-------------------------------------------|
+ *   | 0-1  | presence | raw algorithm output                      |
+ *   | 2-3  | motion   | raw algorithm output                      |
+ *   | 4-5  | tamb     | ambient temperature, hundredths of degC   |
+ *
+ * tamb is the STHS34PF80's own ambient channel at 100 LSB/degC, so the raw
+ * value already is hundredths - it is passed straight through. Independent
+ * of the accelerometer's temperature, which makes the two a cross-check.
+ *
+ * Note: this runs in the I2C2 slave callback and reads I2C1 directly,
+ * which the accelerometer path deliberately no longer does. Three bus
+ * transactions here now instead of two. Same class of problem as before,
+ * one transaction worse; the IR path wants the same cache treatment.
+ */
 void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
-	int16_t presence, motion;
+	int16_t presence, motion, tamb;
     IR_SENSOR_ReadPresence(&presence);
     IR_SENSOR_ReadMotion(&motion);
+    IR_SENSOR_ReadTAmbient(&tamb);
     *status = 0;
-    *len = 4;
+    *len = 6;
     memcpy(&data[0],  &presence,  sizeof(int16_t));
     memcpy(&data[2],  &motion,  sizeof(int16_t));
+    memcpy(&data[4],  &tamb,  sizeof(int16_t));
 }
 
 void Sensor_IR_Config(uint8_t *cmd_data){
@@ -48,15 +67,63 @@ void Sensor_IR_Config(uint8_t *cmd_data){
 	IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
 }
 
+/* Response is nine bytes:
+ *
+ *   | Byte | Field  | Encoding                                      |
+ *   |------|--------|-----------------------------------------------|
+ *   | 0    | reason | event bits, as before this command grew       |
+ *   | 1-2  | x      | int16, mg, little-endian                      |
+ *   | 3-4  | y      | int16, mg, little-endian                      |
+ *   | 5-6  | z      | int16, mg, little-endian                      |
+ *   | 7-8  | temp   | int16, hundredths of degC, little-endian      |
+ *
+ * reason bits: 0x01 Z, 0x02 Y, 0x04 X, 0x08 wake-up, 0x10 tilt,
+ * 0x20 free-fall, 0x40 sleep change.
+ *
+ * Every read also asks the sensor EXTI handler for a new sample, so the
+ * axes are the ones the previous read asked for, not this one's.
+ *
+ * STATUS says how much to trust them, and never withholds them:
+ *
+ *   0  the sample is under a second old
+ *   1  nothing has ever been sampled; the axes are zero and mean nothing
+ *   2  the sample is real but over a second old
+ *
+ * 2 is the normal answer for a master polling slower than a second - the
+ * sample is one poll interval old by construction. It is still the best
+ * value available, and matters because the cache can fall behind without
+ * any interrupt firing: the wake-up detector sees change, not position, so
+ * a slow tilt moves the device without waking anything.
+ *
+ * The reason byte is valid under all three.
+ */
 void Sensor_Accel_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
-    *len = 1;
-    *status = 0;
-    data[0] = ACC_getInt();
+    int16_t xyz[3] = {0, 0, 0};
+    int16_t temp   = 0;
+
+    *len = 9;
+    data[0] = (uint8_t)ACC_getInt();
+
+    /* the return value is the status byte; the outputs stay zero when 1 */
+    *status = (uint8_t)ACC_GetCachedAxes(xyz, &temp);
+
+    data[1] = (uint8_t)((uint16_t)xyz[0] & 0xff);
+    data[2] = (uint8_t)((uint16_t)xyz[0] >> 8);
+    data[3] = (uint8_t)((uint16_t)xyz[1] & 0xff);
+    data[4] = (uint8_t)((uint16_t)xyz[1] >> 8);
+    data[5] = (uint8_t)((uint16_t)xyz[2] & 0xff);
+    data[6] = (uint8_t)((uint16_t)xyz[2] >> 8);
+    data[7] = (uint8_t)((uint16_t)temp   & 0xff);
+    data[8] = (uint8_t)((uint16_t)temp   >> 8);
 }
 
-void Sensor_Accel_Config(uint8_t *cmd_data){
+/* Re-runs the whole accelerometer bring-up with a new wake-up threshold.
+ * STATUS is 0 on success, otherwise the number of the ACC_Init() step that
+ * failed - so this command doubles as a way to ask whether the sensor is
+ * actually configured, which nothing could do before. */
+void Sensor_Accel_Config(uint8_t *cmd_data, uint8_t *status){
 	acc_ths = cmd_data[0];
-	ACC_Init();
+	*status = (uint8_t)ACC_Init();
 }
 
 void Sensor_RTC_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
@@ -246,7 +313,7 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         			Sensor_IR_Config(cmd->data);
         			break;
         		case SENSOR_ACCELEROMETER:
-        			Sensor_Accel_Config(cmd->data);
+        			Sensor_Accel_Config(cmd->data, &resp->status);
         			break;
         		case SENSOR_RTC:
         			Sensor_RTC_Config(cmd->data , &resp->status);
