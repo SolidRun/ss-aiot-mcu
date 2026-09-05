@@ -48,8 +48,17 @@ typedef struct {
     uint8_t cmd;        // Command code
     uint8_t sensor_id;  // Target sensor/module ID
     uint8_t data_len;   // Length of data payload
-    uint8_t data[32];   // Data payload (max 32 bytes)
+    uint8_t data[];     // Command data
 } I2C_Command_t;
+
+/* maximum length of i2c command (write) including command and data */
+#define I2C_CMD_MAX_LEN 35
+
+/* minimum length of i2c command (write) excluding data */
+#define I2C_CMD_MIN_LEN sizeof(I2C_Command_t)
+
+/* calculate maximum command payload size */
+#define I2C_CMD_MAX_PAYLOAD (I2C_CMD_MAX_LEN - I2C_CMD_MIN_LEN)
 
 /* Response structure
  * Defines the format of a response from the I2C slave.
@@ -57,12 +66,24 @@ typedef struct {
 typedef struct {
     uint8_t status;     // 0 = OK, 1 = ERROR
     uint8_t data_len;   // Length of response data
-    uint8_t data[32];   // Response payload
+    uint8_t data[];     // Response data
 } I2C_Response_t;
+
+/* maximum length of i2c response (read) including status and data */
+#define I2C_RESP_MAX_LEN  34
+
+/* minimum length of i2c response (read) excluding data */
+#define I2C_RESP_MIN_LEN sizeof(I2C_Response_t)
+
+/* calculate maximum response payload size */
+#define I2C_RESP_MAX_PAYLOAD (I2C_RESP_MAX_LEN - I2C_RESP_MIN_LEN)
 
 /* Max GPS bytes per read - the response payload size. A full NMEA sentence is
  * longer than this, so a sentence may span several reads. */
 #define GPS_CHUNK_MAX 32U
+
+/* ensure gps chunk size agrees with max payload size */
+_Static_assert(GPS_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "GPS_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
 
 /* API
  * Processes a received command and prepares a response.

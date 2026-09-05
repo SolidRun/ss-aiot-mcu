@@ -160,20 +160,47 @@ when the write completes, and some commands take a while (see
 
 #### How many bytes to read — read this before writing master code
 
-The slave arms its response with an **exact** length and has nothing to send past
-it. **Reading more bytes than the response contains hangs the bus**: the slave runs
-out of data mid-transfer and keeps stretching SCL, and the master sees
-`SCL is stuck low` / `Connection timed out`. It stays that way until the stuck-bus
-watchdog fires, which takes about ten seconds (see
-[Known Limitations](#4-known-limitations)).
+The slave arms **every** response at the full size of its transmit buffer — 34
+bytes, `2 + 32` — regardless of which command produced it. Any read length from
+1 to 34 bytes therefore completes normally, and a master is free to use one
+fixed-size read for everything and let `DATA_LEN` say how much of the reply is
+real.
 
-Every response therefore has a **fixed** length, listed in
-[Response Lengths](#23-response-lengths). Read exactly that many bytes. Where the
-amount of real data varies — only `Read GPS data` — the payload is padded to a
-constant size rather than shortened, so the number of bytes to read never depends
-on what is in the reply.
+**Bytes past `2 + DATA_LEN` are meaningless and must be discarded.** They are
+not padding and not zeros: the buffer is never cleared between commands, so the
+tail holds whatever the previous response left there — NMEA text after a GPS
+read, consumed accelerometer samples after a motion read. Only before the first
+command following a reset is it all zeros, because the buffer lives in `.bss`.
 
-Reading *fewer* bytes than the response contains is tolerated but pointless.
+**Reading more than 34 bytes hangs the bus.** Past that the slave runs out of
+armed data mid-transfer and keeps stretching SCL; the master sees
+`SCL is stuck low` / `Connection timed out`, and it stays that way until the
+stuck-bus watchdog fires about ten seconds later (see
+[Known Limitations](#4-known-limitations)). 34 is the only limit that matters —
+there is no per-command one.
+
+Reading *fewer* bytes than `2 + DATA_LEN` is legitimate rather than merely
+tolerated, and a **short read followed by a longer one works for every command**.
+A master may read 2 bytes to learn `STATUS` and `DATA_LEN`, then issue a second
+read transaction of `2 + DATA_LEN` for the whole reply.
+
+What makes that safe is that only a master **write** runs a handler. The read
+branch of the address-match callback re-arms the transmit from the start of the
+buffer and changes nothing in it, so a bare read is idempotent: repeat it and the
+same bytes come back, indefinitely, until the next command replaces them. The
+response behaves like a re-readable snapshot register.
+
+Two constraints come with it. The re-read always restarts at byte 0 — there is no
+way to fetch the payload alone, so the second transaction re-reads `STATUS` and
+`DATA_LEN` as well. And **the master must not send any command between the two
+reads**: a command overwrites the buffer, and for the three commands that consume
+what they report (`Read ACC motion data`, `Read ACC temperature`, `Read GPS
+data`) the measured data is then gone from both the buffer and the queue it came
+from.
+
+Per-command lengths are listed in [Response Lengths](#23-response-lengths).
+Where the amount of real data varies: `Read GPS data` pads its payload to a
+constant 32 bytes.
 
 ### 2. Command Definitions:
 [Protocol Header](Core/Inc/protocol.h)

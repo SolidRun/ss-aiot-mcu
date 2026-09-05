@@ -12,18 +12,17 @@ extern I2C_HandleTypeDef hi2c2;
 
 #define I2C_SLAVE_ADDR 0x18
 
-static I2C_Command_t rxCommand;
-static I2C_Response_t txResponse;
-#define I2C_MAX_PAYLOAD  (sizeof(rxCommand.data))
+static uint8_t rxBuffer[I2C_CMD_MAX_LEN];
+static I2C_Command_t *rxCommand = (void *)rxBuffer;
+static uint8_t txBuffer[I2C_RESP_MAX_LEN];
+static I2C_Response_t *txResponse = (void *)txBuffer;
 
-static uint8_t rxBuffer[sizeof(I2C_Command_t)];
-static uint8_t txBuffer[sizeof(I2C_Response_t)];
-static uint8_t txDataLen = 2;
-static volatile bool txReady = false;
-static volatile bool i2cBusy = false;
-
-uint8_t rxcount = 0;
-uint8_t expected_bytes = 3;
+/* number of bytes received since last i2c address match */
+static size_t rxcount = 0;
+/* number of bytes the slave was last armed for */
+static size_t expected_bytes = I2C_CMD_MIN_LEN;
+/* flag for dropping received data on invalid commands, clear on address match */
+static bool command_invalid = false;
 
 /* ---------------------------------------------------------------------
  * STUCK BUS RECOVERY
@@ -98,16 +97,16 @@ void I2C_Slave_Init(void) {
  * Decodes command and prepares a response.
  */
 void I2C_Slave_Process(void) {
-    // Copy RX buffer into command struct
-    memcpy(&rxCommand, rxBuffer, sizeof(I2C_Command_t));
-
     // Process the command
-    Protocol_ProcessCommand(&rxCommand, &txResponse);
+    Protocol_ProcessCommand(rxCommand, txResponse);
 
-    // Copy response struct into TX buffer
-    memcpy(txBuffer, &txResponse, sizeof(I2C_Response_t));
-    txDataLen = txResponse.data_len;
-    txReady = true;
+    /*
+     * ProcessCommand is responsible for initialising txResponse members
+     * status, data_len, and data up to data_len bytes.
+     * Where data_len < I2C_RESP_MAX_PAYLOAD remaining space may be left
+     * uninitialised with stale / invalid data. The master must ensure
+     * reading correct size, and discard bytes beyond data_len.
+     */
 }
 
 /* HAL callback: Address match interrupt
@@ -117,17 +116,22 @@ void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, ui
     if (hi2c->Instance == hi2c2.Instance) {
         if (TransferDirection == I2C_DIRECTION_TRANSMIT)
         {
-            // Master will send data to slave
+            /* Master will send data to slave, arm for size of command without payload */
             rxcount = 0;
-            expected_bytes = 3;
+            expected_bytes = I2C_CMD_MIN_LEN;
+            command_invalid = false;
             HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxBuffer, expected_bytes , I2C_LAST_FRAME);
         }
         else
         {
-            // Master requests data from slave
-            uint16_t n = (uint16_t)(2 + txDataLen);
-            if (n > sizeof(txBuffer)) n = sizeof(txBuffer);
-            HAL_I2C_Slave_Seq_Transmit_IT(hi2c, txBuffer, n, I2C_LAST_FRAME);
+            /*
+             * Master requests data from slave.
+             *
+             * Arm at full buffer size allowing any size reads without
+             * stalling the bus (up to sizeof tx buffer). This ensures
+             * neither short nor long reads stall the bus.
+             */
+            HAL_I2C_Slave_Seq_Transmit_IT(hi2c, txBuffer, sizeof(txBuffer), I2C_LAST_FRAME);
         }
     }
 }
@@ -137,29 +141,44 @@ void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, ui
  */
 void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef *hi2c) {
     if (hi2c->Instance == hi2c2.Instance) {
-        rxcount += expected_bytes;  // Update the number of bytes received
-        // First, check if we just received the header (first 3 bytes)
-        if (rxcount == 3) {
-            uint8_t data_len = rxBuffer[2]; // Header's data_len
-            if (data_len > I2C_MAX_PAYLOAD) {
-                txResponse.status   = 1;
-                txResponse.data_len = 0;
-                memcpy(txBuffer, &txResponse, 2);
-                txDataLen      = 0;
-                rxcount        = 0;
-                expected_bytes = 3;
-                return;
-            }
-            if (data_len > 0) {
-                expected_bytes = data_len;
-                HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxBuffer + rxcount, expected_bytes, I2C_LAST_FRAME);
-                return;  // Wait for payload completion
+        /* when we get here we have received exactly the armed number of bytes, count them */
+        rxcount += expected_bytes;
+
+        if (command_invalid) {
+            /* after invalid header always arm receive to avoid stalling the bus till master stops */
+            HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxCommand->data, expected_bytes, I2C_LAST_FRAME);
+            return;
+        }
+
+        if (rxcount == I2C_CMD_MIN_LEN) {
+            /* we received just received the header, no data (or stop) yet */
+            if (rxCommand->data_len > 0) {
+                /* command should have payload */
+
+                if (rxCommand->data_len <= I2C_CMD_MAX_PAYLOAD) {
+                    /* prepare to receive payload data exact length */
+                    expected_bytes = rxCommand->data_len;
+                } else {
+                    /*
+                     * Command is invalid but there is no easy way out.
+                     * Prepare to receive more data and set error flag.
+                     */
+                    expected_bytes = I2C_CMD_MAX_PAYLOAD;
+                    command_invalid = true;
+
+                    /* prepare error response in case master cares */
+                    txResponse->status = 1;
+                    txResponse->data_len = 0;
+                }
+
+                /* arm to receive data payload */
+                HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxCommand->data, expected_bytes, I2C_LAST_FRAME);
+                return; // Wait for payload completion
             }
         }
 
-        // If we reached here, we have the full command (header + payload)
+        /* we have received the full command (header + payload) */
         I2C_Slave_Process();  // Process command
-        i2cBusy = false;
     }
 }
 
