@@ -53,7 +53,8 @@ struct ssaiot_sc_priv {
 /* transport api (transport.c) */
 
 int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
-		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len, u8 *status);
+		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len,
+		   u8 *rx_len_valid, u8 *status);
 
 /* irq api (irq.c) */
 

@@ -27,7 +27,8 @@ static int ssaiot_sc_power_off(struct sys_off_data *data)
 	int ret;
 
 	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_OFF,
-			     SSAIOT_SC_SENSOR_SOM, NULL, 0, NULL, 0, &status);
+			     SSAIOT_SC_SENSOR_SOM, NULL, 0, NULL, 0,
+			     NULL, &status);
 	if (ret) {
 		dev_emerg(priv->dev, "Failed to request power-off: %d\n", ret);
 		return NOTIFY_DONE;

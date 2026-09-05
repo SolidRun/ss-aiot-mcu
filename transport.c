@@ -19,7 +19,10 @@
  * @tx_len: Command payload length, becomes the DATA_LEN header byte
  * @rx: Buffer for the response payload, may be %NULL if @rx_len is 0
  * @rx_len: Response payload length, excluding the STATUS and DATA_LEN bytes
- * @status: Where to store the in-band STATUS byte
+ * @rx_len_valid: Where to store the response's own DATA_LEN, or %NULL to
+ *		  require it to equal @rx_len
+ * @status: Where to store the in-band STATUS byte, or %NULL to have any status
+ *	    other than %SSAIOT_SC_STATUS_OK reported as -EIO
  *
  * Issues the 3-byte command header plus @tx_len payload bytes, then reads
  * %SSAIOT_SC_RESP_HDR_LEN + @rx_len bytes back in the same I2C transfer
@@ -31,12 +34,21 @@
  * response length table in the firmware README. The controller has nothing to
  * send past its armed length and keeps stretching SCL if asked for more, which
  * wedges the bus until its stuck-bus watchdog fires roughly ten seconds later.
- * Reading short is tolerated by the firmware but is reported here as -EPROTO.
+ *
+ * How much of that fixed read is meaningful is a separate question. Most
+ * commands fill it entirely and pass no @rx_len_valid, which asks for the
+ * strict check: a short answer is a firmware or caller bug and is rejected
+ * rather than handed out half filled, because the tail of a short response is
+ * whatever the controller had left over from the previous command. Commands
+ * that legitimately answer short - a drain that returns fewer records than the
+ * buffer holds - pass @rx_len_valid and get told how many bytes are theirs.
+ * Either way @rx receives all @rx_len bytes that were read.
  *
  * Return: 0 on success, negative errno on failure.
  */
 int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
-		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len, u8 *status)
+		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len,
+		   u8 *rx_len_valid, u8 *status)
 {
 	u8 tx_buf[SSAIOT_SC_CMD_HDR_LEN + SSAIOT_SC_MAX_DATA_LEN];
 	u8 rx_buf[SSAIOT_SC_RESP_HDR_LEN + SSAIOT_SC_MAX_DATA_LEN];
@@ -60,7 +72,7 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 	if (tx_len > SSAIOT_SC_MAX_DATA_LEN || rx_len > SSAIOT_SC_MAX_DATA_LEN)
 		return -EMSGSIZE;
 
-	if ((tx_len && !tx) || (rx_len && !rx) || !status)
+	if ((tx_len && !tx) || (rx_len && !rx))
 		return -EINVAL;
 
 	tx_buf[0] = cmd;
@@ -89,13 +101,23 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 	resp_len = rx_buf[1];
 
 	/*
-	 * The response length is fixed per command, so a mismatch means either
-	 * the caller's expectation is wrong or the firmware does not implement
-	 * this command. Reject it rather than hand out a partially filled
-	 * buffer - the tail of a short response is whatever the controller had
-	 * left over from the previous command.
+	 * Claiming more than was read is always wrong, however lenient the
+	 * caller is willing to be: it would walk whoever trusts the reported
+	 * length off the end of their own buffer.
 	 */
-	if (resp_len != rx_len) {
+	if (resp_len > rx_len) {
+		dev_err_ratelimited(priv->dev,
+				    "oversized response for cmd 0x%02x sensor 0x%02x: "
+				    "got %u, read %u.\n",
+				    cmd, sensor_id, resp_len, rx_len);
+		return -EPROTO;
+	}
+
+	/*
+	 * A mismatch on a fixed-length command means either the caller's
+	 * expectation is wrong or the firmware does not implement it.
+	 */
+	if (!rx_len_valid && resp_len != rx_len) {
 		dev_err_ratelimited(priv->dev,
 				    "unexpected response length for cmd 0x%02x sensor 0x%02x: "
 				    "got %u, expected %u.\n",
@@ -103,7 +125,21 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 		return -EPROTO;
 	}
 
-	*status = resp_status;
+	/*
+	 * A caller that does not take the status byte cannot act on the
+	 * distinctions it draws, so anything but OK becomes a plain failure.
+	 * Callers that need to tell a stale reading from a rejected command
+	 * take it themselves.
+	 */
+	if (!status && resp_status != SSAIOT_SC_STATUS_OK)
+		return -EIO;
+
+	/* validation done, nothing below can fail */
+	if (rx_len_valid)
+		*rx_len_valid = resp_len;
+
+	if (status)
+		*status = resp_status;
 
 	if (rx_len)
 		memcpy(rx, &rx_buf[SSAIOT_SC_RESP_HDR_LEN], rx_len);

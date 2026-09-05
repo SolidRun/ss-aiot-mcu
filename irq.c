@@ -137,7 +137,7 @@ static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 	 */
 	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_READ,
 			     SSAIOT_SC_SENSOR_INTERRUPTS, NULL, 0,
-			     flags, sizeof(flags), &status);
+			     flags, sizeof(flags), NULL, &status);
 	if (ret) {
 		/* delay next attempt in case of bus errors */
 		msleep(10);
