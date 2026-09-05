@@ -54,6 +54,75 @@ The system controller reference firmware is configured for single cell type 1865
 
 Charger and battery status can be queried using `upower -d` command.
 
+### Accelerometer
+
+The accelerometer driver registers two IIO devices: `ssaiot-sc-accel` for the
+three axes, and `ssaiot-sc-accel-temp` for the sensor's die temperature. Both
+are buffer capable and timestamp every sample. Requires `CONFIG_IIO_BUFFER` and
+`CONFIG_IIO_KFIFO_BUF`.
+
+The sensor samples continuously at 416 Hz by default, configurable in controller
+firmware.
+
+Neither device offers a `raw` attribute. The controller serves samples from a
+queue that is consumed by being read, so there is no current value to hand out
+one at a time - read from the buffer instead, one sample if that is all that is
+wanted:
+
+```sh
+iio_readdev -b 8 -s 64 ssaiot-sc-accel > motion.bin
+iio_readdev -b 1 -s 1 ssaiot-sc-accel > sample.bin
+```
+
+Apply `scale`, and for temperature `offset` as well, to interpret the result:
+
+```sh
+iio_attr -c ssaiot-sc-accel accel_z scale
+iio_attr -c ssaiot-sc-accel-temp temp offset
+```
+
+Temperature arrives far more slowly than motion, slowly enough that the libiio
+tools time out waiting for it. Ask for very little at a time, and expect to wait:
+
+```sh
+iio_readdev -b 1 -s 2 ssaiot-sc-accel-temp > temp.bin
+```
+
+The die temperature is not guaranteed accurate, use only as indicator.
+
+#### Events
+
+The controller runs its own motion, tilt and free-fall detectors and reports each
+as an IIO event on `ssaiot-sc-accel`. They sit on event-only channels, so they
+never appear in the buffer:
+
+| Detector | Enable attribute |
+|----------|------------------|
+| Motion | <code>n_accel_x\|y\|z_mag_adaptive_rising_en</code> |
+| Tilt | `in_incli_change_either_en` |
+| Free-fall | `in_accel_x&y&z_mag_falling_en` |
+
+Enabling an attribute only gates delivery to userspace. The detectors are
+configured by controller firmware and run either way.
+
+##### Detection, with no tooling
+
+The interrupt counters advance on every detection whether or not userspace
+enabled the event, so this alone shows the controller firing and the
+demultiplexer routing each detector to its own source:
+
+```sh
+grep -E 'motion|tilt|freefall' /proc/interrupts
+```
+
+Move, tilt or drop the board, run it again, and the matching counter has
+stepped.
+
+##### Detection with libIIO
+
+The last released version of [libIIO](analogdevicesinc.github.io/libiio/main/) (v0.26) does not support iio event channels.
+Once v1.0 will be released, this section shall be updated.
+
 ### RTC
 
 The RTC supports read-only time based on GNSS, and wake on alarm.

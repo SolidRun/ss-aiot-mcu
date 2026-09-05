@@ -1,0 +1,636 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * SolidRun SolidSense AIOT Board System Controller Accelerometer Driver
+ *
+ * Copyright (C) 2026 Josua Mayer <josua@solid-run.com>
+ */
+
+#include <linux/iio/buffer.h>
+#include <linux/iio/events.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/kfifo_buf.h>
+#include <linux/interrupt.h>
+#include <linux/mod_devicetable.h>
+#include <linux/platform_device.h>
+#include <linux/workqueue.h>
+
+#include "ssaiot_sc.h"
+
+struct ssaiot_sc_accel_sample {
+	__le32 timestamp; /* 25us per LSB, mcu timebase */
+	__le16 x; /* raw, 0.061 mg/LSB at +-2g */
+	__le16 y; /* raw, 0.061 mg/LSB at +-2g */
+	__le16 z; /* raw, 0.061 mg/LSB at +-2g */
+} __packed;
+
+struct ssaiot_sc_accel_temp {
+	__le32 timestamp;
+	__le16 temp; /* raw, 256 LSB per degree celsius, 0 is 25 degrees */
+} __packed;
+
+/* time unit of the controller's timebase, 25us/LSB */
+#define SSAIOT_SC_ACCEL_TICK_NS 25000
+
+/* maximum accelerometer motion data samples per read (payload size) */
+#define SSAIOT_SC_ACCEL_MOTION_PER_READ 8
+/* maximum accelerometer temperature data samples per read (payload size) */
+#define SSAIOT_SC_ACCEL_TEMP_PER_READ 1
+
+/* whole responses, as read */
+struct ssaiot_sc_accel_motion_resp {
+	__le32 now; /* 25us per LSB, mcu timebase when the read was decoded */
+	struct ssaiot_sc_accel_sample sample[SSAIOT_SC_ACCEL_MOTION_PER_READ];
+} __packed;
+
+struct ssaiot_sc_accel_temp_resp {
+	__le32 now;
+	struct ssaiot_sc_accel_temp sample[SSAIOT_SC_ACCEL_TEMP_PER_READ];
+} __packed;
+
+static_assert(sizeof(struct ssaiot_sc_accel_motion_resp) <= SSAIOT_SC_RESP_MAX_DATA_LEN);
+static_assert(sizeof(struct ssaiot_sc_accel_temp_resp) <= SSAIOT_SC_RESP_MAX_DATA_LEN);
+
+/* how long to wait before looking again once a stream has run dry */
+#define SSAIOT_SC_ACCEL_MOTION_IDLE_MS 100
+#define SSAIOT_SC_ACCEL_TEMP_IDLE_MS 1000
+
+/* detectors the controller reports, and the channel address each event uses */
+#define SSAIOT_SC_ACCEL_EV_MOTION 0
+#define SSAIOT_SC_ACCEL_EV_TILT 1
+#define SSAIOT_SC_ACCEL_EV_FREEFALL 2
+
+/* scan indices of the axes, and their positions in the scan below */
+#define SSAIOT_SC_ACCEL_X 0
+#define SSAIOT_SC_ACCEL_Y 1
+#define SSAIOT_SC_ACCEL_Z 2
+
+/* motion channel */
+struct ssaiot_sc_accel_motion {
+	struct ssaiot_sc_priv *sc;
+	struct iio_dev *indio_dev;
+	struct delayed_work work;
+
+	/* one scan includes 3 axis + timestamp */
+	struct {
+		s16 axis[3];
+		aligned_s64 timestamp;
+	} scan;
+
+	/* which detectors userspace asked to hear about */
+	unsigned long events;
+};
+
+/* temperature channel */
+struct ssaiot_sc_accel_thermal {
+	struct ssaiot_sc_priv *sc;
+	struct iio_dev *indio_dev;
+	struct delayed_work work;
+
+	/* one scan includes temperature + timestamp */
+	struct {
+		s16 temp;
+		aligned_s64 timestamp;
+	} scan;
+};
+
+/* driver private data, both streams so shutdown can reach their work */
+struct ssaiot_sc_accel_priv {
+	struct ssaiot_sc_accel_motion *motion;
+	struct ssaiot_sc_accel_thermal *thermal;
+};
+
+/* calculate record count from response size in bytes, after header */
+static inline int ssaiot_sc_accel_records(u8 len, size_t hdr_len, size_t rec_size)
+{
+	if (len < hdr_len || (len - hdr_len) % rec_size)
+		return -EPROTO;
+
+	return (len - hdr_len) / rec_size;
+}
+
+/*
+ * Convert a record's controller timestamp to CLOCK_REALTIME, given the host
+ * time of the snapshot the same response opened with. The counter difference is
+ * taken modulo 2^32 and read signed, so a wrap resolves to the shorter interval.
+ */
+static s64 ssaiot_sc_accel_timestamp(s64 ts_ref, __le32 now, __le32 stamp)
+{
+	s32 delta = (s32)(le32_to_cpu(stamp) - le32_to_cpu(now));
+
+	return ts_ref + (s64)delta * SSAIOT_SC_ACCEL_TICK_NS;
+}
+
+/*
+ * Read captured samples once and push them to the buffer, then re-queue: with
+ * no delay while responses come back full, otherwise after the idle interval.
+ * Runs only while the buffer is enabled.
+ */
+static void ssaiot_sc_accel_motion_poll(struct work_struct *work)
+{
+	struct ssaiot_sc_accel_motion *motion =
+		container_of(to_delayed_work(work),
+			     struct ssaiot_sc_accel_motion, work);
+	unsigned int delay_ms = SSAIOT_SC_ACCEL_MOTION_IDLE_MS;
+	struct ssaiot_sc_accel_motion_resp resp;
+	s64 ts_ref;
+	u8 len;
+	int n, i;
+
+	n = ssaiot_sc_xfer(motion->sc, SSAIOT_SC_CMD_SENSOR_READ,
+			   SSAIOT_SC_SENSOR_ACCEL_MOTION, NULL, 0,
+			   (u8 *)&resp, sizeof(resp), &len, NULL, &ts_ref);
+	if (!n)
+		n = ssaiot_sc_accel_records(len, offsetof(typeof(resp), sample),
+					    sizeof(resp.sample[0]));
+
+	if (n < 0) {
+		dev_warn_ratelimited(motion->sc->dev,
+				     "motion read failed: %d.\n", n);
+	} else {
+		for (i = 0; i < n; i++) {
+			motion->scan.axis[SSAIOT_SC_ACCEL_X] =
+				(s16)le16_to_cpu(resp.sample[i].x);
+			motion->scan.axis[SSAIOT_SC_ACCEL_Y] =
+				(s16)le16_to_cpu(resp.sample[i].y);
+			motion->scan.axis[SSAIOT_SC_ACCEL_Z] =
+				(s16)le16_to_cpu(resp.sample[i].z);
+
+			iio_push_to_buffers_with_timestamp(motion->indio_dev,
+					&motion->scan,
+					ssaiot_sc_accel_timestamp(ts_ref, resp.now,
+							resp.sample[i].timestamp));
+		}
+
+		/* a full response says the capture held at least this much more */
+		if (n == ARRAY_SIZE(resp.sample))
+			delay_ms = 0;
+	}
+
+	queue_delayed_work(motion->sc->wq, &motion->work,
+			   msecs_to_jiffies(delay_ms));
+}
+
+static int ssaiot_sc_accel_motion_postenable(struct iio_dev *indio_dev)
+{
+	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+
+	queue_delayed_work(motion->sc->wq, &motion->work, 0);
+
+	return 0;
+}
+
+static int ssaiot_sc_accel_motion_predisable(struct iio_dev *indio_dev)
+{
+	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+
+	/* safe against the work re-queueing itself */
+	cancel_delayed_work_sync(&motion->work);
+
+	return 0;
+}
+
+static const struct iio_buffer_setup_ops ssaiot_sc_accel_motion_setup_ops = {
+	.postenable = ssaiot_sc_accel_motion_postenable,
+	.predisable = ssaiot_sc_accel_motion_predisable,
+};
+
+/*
+ * No IIO_CHAN_INFO_RAW: the protocol offers no reading of the current
+ * acceleration, only a queue that is served oldest first and consumed by being
+ * read. A one-shot attribute over that would hand back a stale sample and
+ * destroy it on the way past. The buffer is the whole interface; read one
+ * sample from it if that is all that is wanted.
+ */
+static int ssaiot_sc_accel_motion_read_raw(struct iio_dev *indio_dev,
+					   struct iio_chan_spec const *chan,
+					   int *val, int *val2, long mask)
+{
+	switch (mask) {
+	case IIO_CHAN_INFO_SCALE:
+		/*
+		 * Full scale +-2g over a signed 16 bit reading, so one LSB is
+		 * 2 * 9.80665 / 32768 m/s^2.
+		 */
+		*val = 0;
+		*val2 = 598550;
+		return IIO_VAL_INT_PLUS_NANO;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+/* report one detector, if userspace is listening for it */
+static irqreturn_t ssaiot_sc_accel_event(struct iio_dev *indio_dev,
+					 unsigned int ev, u64 code)
+{
+	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+
+	if (test_bit(ev, &motion->events))
+		iio_push_event(indio_dev, code, iio_get_time_ns(indio_dev));
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t ssaiot_sc_accel_motion_event(int irq, void *data)
+{
+	return ssaiot_sc_accel_event(data, SSAIOT_SC_ACCEL_EV_MOTION,
+				     IIO_MOD_EVENT_CODE(IIO_ACCEL, 0,
+							IIO_MOD_X_OR_Y_OR_Z,
+							IIO_EV_TYPE_MAG_ADAPTIVE,
+							IIO_EV_DIR_RISING));
+}
+
+static irqreturn_t ssaiot_sc_accel_tilt_event(int irq, void *data)
+{
+	return ssaiot_sc_accel_event(data, SSAIOT_SC_ACCEL_EV_TILT,
+				     IIO_UNMOD_EVENT_CODE(IIO_INCLI, 0,
+							  IIO_EV_TYPE_CHANGE,
+							  IIO_EV_DIR_EITHER));
+}
+
+static irqreturn_t ssaiot_sc_accel_freefall_event(int irq, void *data)
+{
+	return ssaiot_sc_accel_event(data, SSAIOT_SC_ACCEL_EV_FREEFALL,
+				     IIO_MOD_EVENT_CODE(IIO_ACCEL, 0,
+							IIO_MOD_X_AND_Y_AND_Z,
+							IIO_EV_TYPE_MAG,
+							IIO_EV_DIR_FALLING));
+}
+
+/*
+ * The detectors run in the controller and cannot be turned off from here, so
+ * these gate reporting rather than the hardware. The channel address says which
+ * detector an attribute belongs to.
+ */
+static int ssaiot_sc_accel_read_event_config(struct iio_dev *indio_dev,
+					     const struct iio_chan_spec *chan,
+					     enum iio_event_type type,
+					     enum iio_event_direction dir)
+{
+	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+
+	return test_bit(chan->address, &motion->events);
+}
+
+static int ssaiot_sc_accel_write_event_config(struct iio_dev *indio_dev,
+					      const struct iio_chan_spec *chan,
+					      enum iio_event_type type,
+					      enum iio_event_direction dir,
+					      int state)
+{
+	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+
+	assign_bit(chan->address, &motion->events, state);
+
+	return 0;
+}
+
+static const struct iio_info ssaiot_sc_accel_motion_info = {
+	.read_raw = ssaiot_sc_accel_motion_read_raw,
+	.read_event_config = ssaiot_sc_accel_read_event_config,
+	.write_event_config = ssaiot_sc_accel_write_event_config,
+};
+
+#define SSAIOT_SC_ACCEL_CHANNEL(_axis) {				\
+	.type = IIO_ACCEL,						\
+	.modified = 1,							\
+	.channel2 = IIO_MOD_##_axis,					\
+	.scan_index = SSAIOT_SC_ACCEL_##_axis,				\
+	.scan_type = {							\
+		.sign = 's',						\
+		.realbits = 16,						\
+		.storagebits = 16,					\
+		.endianness = IIO_CPU,					\
+	},								\
+	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE),		\
+}
+
+/* the detectors are firmware configured, so only reporting can be turned off */
+#define SSAIOT_SC_ACCEL_EVENT_SPEC(_type, _dir) {			\
+	.type = _type,							\
+	.dir = _dir,							\
+	.mask_separate = BIT(IIO_EV_INFO_ENABLE),			\
+}
+
+static const struct iio_event_spec ssaiot_sc_accel_motion_event_spec[] = {
+	SSAIOT_SC_ACCEL_EVENT_SPEC(IIO_EV_TYPE_MAG_ADAPTIVE, IIO_EV_DIR_RISING),
+};
+
+static const struct iio_event_spec ssaiot_sc_accel_tilt_event_spec[] = {
+	SSAIOT_SC_ACCEL_EVENT_SPEC(IIO_EV_TYPE_CHANGE, IIO_EV_DIR_EITHER),
+};
+
+static const struct iio_event_spec ssaiot_sc_accel_freefall_event_spec[] = {
+	SSAIOT_SC_ACCEL_EVENT_SPEC(IIO_EV_TYPE_MAG, IIO_EV_DIR_FALLING),
+};
+
+/* event only channels, carrying no data of their own */
+#define SSAIOT_SC_ACCEL_EVENT_CHANNEL(_type, _mod, _addr, _spec) {	\
+	.type = _type,							\
+	.modified = _mod != 0,						\
+	.channel2 = _mod,						\
+	.address = _addr,						\
+	.scan_index = -1,						\
+	.event_spec = _spec,						\
+	.num_event_specs = ARRAY_SIZE(_spec),				\
+}
+
+static const struct iio_chan_spec ssaiot_sc_accel_motion_channels[] = {
+	SSAIOT_SC_ACCEL_CHANNEL(X),
+	SSAIOT_SC_ACCEL_CHANNEL(Y),
+	SSAIOT_SC_ACCEL_CHANNEL(Z),
+	IIO_CHAN_SOFT_TIMESTAMP(3),
+	SSAIOT_SC_ACCEL_EVENT_CHANNEL(IIO_ACCEL, IIO_MOD_X_OR_Y_OR_Z,
+				      SSAIOT_SC_ACCEL_EV_MOTION,
+				      ssaiot_sc_accel_motion_event_spec),
+	SSAIOT_SC_ACCEL_EVENT_CHANNEL(IIO_ACCEL, IIO_MOD_X_AND_Y_AND_Z,
+				      SSAIOT_SC_ACCEL_EV_FREEFALL,
+				      ssaiot_sc_accel_freefall_event_spec),
+	SSAIOT_SC_ACCEL_EVENT_CHANNEL(IIO_INCLI, 0,
+				      SSAIOT_SC_ACCEL_EV_TILT,
+				      ssaiot_sc_accel_tilt_event_spec),
+};
+
+/* always scan all three axes, and let the core demux what the reader enabled */
+static const unsigned long ssaiot_sc_accel_motion_scan_masks[] = {
+	BIT(SSAIOT_SC_ACCEL_X) | BIT(SSAIOT_SC_ACCEL_Y) | BIT(SSAIOT_SC_ACCEL_Z),
+	0
+};
+
+static int ssaiot_sc_accel_request_event(struct device *dev,
+					 struct iio_dev *indio_dev,
+					 const char *name,
+					 irq_handler_t handler)
+{
+	int irq;
+
+	irq = platform_get_irq_byname(to_platform_device(dev), name);
+	if (irq < 0)
+		return irq;
+
+	/* nested and threaded, so the handler runs in the demux thread */
+	return devm_request_threaded_irq(dev, irq, NULL, handler, IRQF_ONESHOT,
+					 name, indio_dev);
+}
+
+static int ssaiot_sc_accel_probe_motion(struct device *dev,
+					struct ssaiot_sc_priv *sc,
+					struct ssaiot_sc_accel_priv *priv)
+{
+	struct ssaiot_sc_accel_motion *motion;
+	struct iio_dev *indio_dev;
+	int ret;
+
+	indio_dev = devm_iio_device_alloc(dev, sizeof(*motion));
+	if (!indio_dev)
+		return -ENOMEM;
+
+	motion = iio_priv(indio_dev);
+	motion->sc = sc;
+	motion->indio_dev = indio_dev;
+	priv->motion = motion;
+	INIT_DELAYED_WORK(&motion->work, ssaiot_sc_accel_motion_poll);
+
+	indio_dev->name = "ssaiot-sc-accel";
+	indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->info = &ssaiot_sc_accel_motion_info;
+	indio_dev->channels = ssaiot_sc_accel_motion_channels;
+	indio_dev->num_channels = ARRAY_SIZE(ssaiot_sc_accel_motion_channels);
+	indio_dev->available_scan_masks = ssaiot_sc_accel_motion_scan_masks;
+
+	ret = devm_iio_kfifo_buffer_setup(dev, indio_dev,
+					  &ssaiot_sc_accel_motion_setup_ops);
+	if (ret)
+		return ret;
+
+	ret = ssaiot_sc_accel_request_event(dev, indio_dev, "motion",
+					    ssaiot_sc_accel_motion_event);
+	if (ret)
+		return ret;
+
+	ret = ssaiot_sc_accel_request_event(dev, indio_dev, "tilt",
+					    ssaiot_sc_accel_tilt_event);
+	if (ret)
+		return ret;
+
+	ret = ssaiot_sc_accel_request_event(dev, indio_dev, "freefall",
+					    ssaiot_sc_accel_freefall_event);
+	if (ret)
+		return ret;
+
+	return devm_iio_device_register(dev, indio_dev);
+}
+
+/*
+ * Read captured die temperatures once and push them to the buffer, then
+ * re-queue: with no delay while responses come back full, otherwise after the
+ * idle interval. Runs only while the buffer is enabled.
+ */
+static void ssaiot_sc_accel_temp_poll(struct work_struct *work)
+{
+	struct ssaiot_sc_accel_thermal *thermal =
+		container_of(to_delayed_work(work),
+			     struct ssaiot_sc_accel_thermal, work);
+	unsigned int delay_ms = SSAIOT_SC_ACCEL_TEMP_IDLE_MS;
+	struct ssaiot_sc_accel_temp_resp resp;
+	s64 ts_ref;
+	u8 len;
+	int n, i;
+
+	n = ssaiot_sc_xfer(thermal->sc, SSAIOT_SC_CMD_SENSOR_READ,
+			   SSAIOT_SC_SENSOR_ACCEL_TEMP, NULL, 0,
+			   (u8 *)&resp, sizeof(resp), &len, NULL, &ts_ref);
+	if (!n)
+		n = ssaiot_sc_accel_records(len, offsetof(typeof(resp), sample),
+					    sizeof(resp.sample[0]));
+
+	if (n < 0) {
+		dev_warn_ratelimited(thermal->sc->dev,
+				     "temperature read failed: %d.\n", n);
+	} else {
+		for (i = 0; i < n; i++) {
+			thermal->scan.temp =
+				(s16)le16_to_cpu(resp.sample[i].temp);
+
+			iio_push_to_buffers_with_timestamp(thermal->indio_dev,
+					&thermal->scan,
+					ssaiot_sc_accel_timestamp(ts_ref, resp.now,
+							resp.sample[i].timestamp));
+		}
+
+		/* a full response says the stream held at least this much more */
+		if (n == ARRAY_SIZE(resp.sample))
+			delay_ms = 0;
+	}
+
+	queue_delayed_work(thermal->sc->wq, &thermal->work,
+			   msecs_to_jiffies(delay_ms));
+}
+
+static int ssaiot_sc_accel_temp_postenable(struct iio_dev *indio_dev)
+{
+	struct ssaiot_sc_accel_thermal *thermal = iio_priv(indio_dev);
+
+	queue_delayed_work(thermal->sc->wq, &thermal->work, 0);
+
+	return 0;
+}
+
+static int ssaiot_sc_accel_temp_predisable(struct iio_dev *indio_dev)
+{
+	struct ssaiot_sc_accel_thermal *thermal = iio_priv(indio_dev);
+
+	/* safe against the work re-queueing itself */
+	cancel_delayed_work_sync(&thermal->work);
+
+	return 0;
+}
+
+static const struct iio_buffer_setup_ops ssaiot_sc_accel_temp_setup_ops = {
+	.postenable = ssaiot_sc_accel_temp_postenable,
+	.predisable = ssaiot_sc_accel_temp_predisable,
+};
+
+/* no IIO_CHAN_INFO_RAW here either, for the same reason as the axes */
+static int ssaiot_sc_accel_temp_read_raw(struct iio_dev *indio_dev,
+					 struct iio_chan_spec const *chan,
+					 int *val, int *val2, long mask)
+{
+	switch (mask) {
+	case IIO_CHAN_INFO_SCALE:
+		/*
+		 * 256 LSB per degree against an abi in millidegrees, so
+		 * 1000 / 256 per LSB, applied after the offset.
+		 */
+		*val = 3;
+		*val2 = 906250;
+		return IIO_VAL_INT_PLUS_MICRO;
+
+	case IIO_CHAN_INFO_OFFSET:
+		/* zero means 25 degrees, which is 25 * 256 LSB from zero */
+		*val = 6400;
+		return IIO_VAL_INT;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static const struct iio_info ssaiot_sc_accel_temp_info = {
+	.read_raw = ssaiot_sc_accel_temp_read_raw,
+};
+
+static const struct iio_chan_spec ssaiot_sc_accel_temp_channels[] = {
+	{
+		/* sensor die temperature */
+		.type = IIO_TEMP,
+		.scan_index = 0,
+		.scan_type = {
+			.sign = 's',
+			.realbits = 16,
+			.storagebits = 16,
+			.endianness = IIO_CPU,
+		},
+		.info_mask_separate = BIT(IIO_CHAN_INFO_SCALE) |
+				      BIT(IIO_CHAN_INFO_OFFSET),
+	},
+	IIO_CHAN_SOFT_TIMESTAMP(1),
+};
+
+static int ssaiot_sc_accel_probe_temp(struct device *dev,
+				      struct ssaiot_sc_priv *sc,
+				      struct ssaiot_sc_accel_priv *priv)
+{
+	struct ssaiot_sc_accel_thermal *thermal;
+	struct iio_dev *indio_dev;
+	int ret;
+
+	indio_dev = devm_iio_device_alloc(dev, sizeof(*thermal));
+	if (!indio_dev)
+		return -ENOMEM;
+
+	thermal = iio_priv(indio_dev);
+	thermal->sc = sc;
+	thermal->indio_dev = indio_dev;
+	priv->thermal = thermal;
+	INIT_DELAYED_WORK(&thermal->work, ssaiot_sc_accel_temp_poll);
+
+	indio_dev->name = "ssaiot-sc-accel-temp";
+	indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->info = &ssaiot_sc_accel_temp_info;
+	indio_dev->channels = ssaiot_sc_accel_temp_channels;
+	indio_dev->num_channels = ARRAY_SIZE(ssaiot_sc_accel_temp_channels);
+
+	ret = devm_iio_kfifo_buffer_setup(dev, indio_dev,
+					  &ssaiot_sc_accel_temp_setup_ops);
+	if (ret)
+		return ret;
+
+	return devm_iio_device_register(dev, indio_dev);
+}
+
+static int ssaiot_sc_accel_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct ssaiot_sc_accel_priv *priv;
+	struct ssaiot_sc_priv *sc;
+	int ret;
+
+	/* the mfd cell has no dedicated dt node, reuse parent */
+	dev->of_node = dev->parent->of_node;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	platform_set_drvdata(pdev, priv);
+	sc = dev_get_drvdata(dev->parent);
+
+	ret = ssaiot_sc_accel_probe_motion(dev, sc, priv);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to register motion device.\n");
+
+	ret = ssaiot_sc_accel_probe_temp(dev, sc, priv);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to register temperature device.\n");
+
+	return 0;
+}
+
+/* prepare for shutdown, i.e. release the bus and disable interrupts */
+static void ssaiot_sc_accel_shutdown(struct platform_device *pdev)
+{
+	struct ssaiot_sc_accel_priv *priv = platform_get_drvdata(pdev);
+
+	/* stop work to release the bus */
+	cancel_delayed_work_sync(&priv->motion->work);
+	cancel_delayed_work_sync(&priv->thermal->work);
+}
+
+/*
+ * The id must match the MFD cell name and is capped at PLATFORM_NAME_SIZE,
+ * so it stays short. Since an id table suppresses the driver name fallback in
+ * platform_match(), the driver name itself is free to be descriptive.
+ */
+static const struct platform_device_id ssaiot_sc_accel_id_table[] = {
+	{ "ssaiot-sc-acc", 0 },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(platform, ssaiot_sc_accel_id_table);
+
+static struct platform_driver ssaiot_sc_accel_driver = {
+	.driver = {
+		.name = "solidsense-aiot-system-controller-accel",
+	},
+	.probe = ssaiot_sc_accel_probe,
+	.shutdown = ssaiot_sc_accel_shutdown,
+	.id_table = ssaiot_sc_accel_id_table,
+};
+module_platform_driver(ssaiot_sc_accel_driver);
+
+MODULE_AUTHOR("Josua Mayer");
+MODULE_DESCRIPTION("SolidRun SolidSense AIOT Board System Controller Accelerometer Driver");
+MODULE_LICENSE("GPL v2");
