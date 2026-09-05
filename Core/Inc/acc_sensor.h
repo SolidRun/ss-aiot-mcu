@@ -8,6 +8,10 @@
 #ifndef ACC_SENSOR_H
 #define ACC_SENSOR_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include "ism330dhcx.h"
 
 // Wake-Up Threshold defines the acceleration level that triggers a wake-up event.
@@ -47,15 +51,37 @@ int ACC_getInt();
 void ACC_clearInt();
 void ACC_HandleInt();
 
-/* Take a fresh sample into the axis cache. This is a bus operation - only
- * ever called from the _6AX_INT EXTI handler. */
-int ACC_RefreshAxes(void);
+/* one sample of accelerometer motion data, packed to match wire format of i2c protocol */
+typedef struct __attribute__((packed)) {
+    /*
+     * Timestamp is 25us per LSB on the MCU's own timebase, in RAM and on the
+     * wire alike. Synced with the accelerometer's internal counter at the
+     * start of each read from its FIFO.
+     *
+     * Absolute: it counts from MCU start and wraps every 29.8 hours. Take
+     * differences modulo 2^32 and read them signed.
+     */
+    uint32_t timestamp; /* 25us per LSB, MCU timebase - see above */
+    int16_t x; /* raw, 0.061 mg/LSB at +-2g */
+    int16_t y; /* raw, 0.061 mg/LSB at +-2g */
+    int16_t z; /* raw, 0.061 mg/LSB at +-2g */
+} acc_motionsample_t;
 
-/* Serve the cached sample - xyz in mg, temp_c100 in hundredths of a degree
- * Celsius. Touches no bus. The return value is the protocol status byte:
- *   0 = the sample is no older than a second
- *   1 = nothing has ever been sampled, both outputs untouched
- *   2 = a real sample, but an older one */
-int ACC_GetCachedAxes(int16_t *xyz, int16_t *temp_c100);
+/* Current value of the counter the timestamps above are taken from, so a
+ * reader can turn one into an age. Same 25us units and same wrap. */
+uint32_t ACC_TimestampNow(void);
+
+/* Take as many samples from buffer as are available and fit destination */
+size_t ACC_TakeMotionSamples(acc_motionsample_t *dst, size_t max_count);
+
+/* one sample of die temperature data, packed to match wire format of i2c protocol */
+typedef struct __attribute__((packed)) {
+    uint32_t timestamp; /* 25us per LSB, MCU timebase - see above */
+    int16_t temp; /* raw, 256 LSB/degC, 0 LSB at 25 degC */
+} acc_tempsample_t;
+
+/* As ACC_TakeMotionSamples, for the single cached die temperature. */
+size_t ACC_TakeTempSamples(acc_tempsample_t *dst, size_t max_count);
+
 #endif
 

@@ -30,15 +30,16 @@ typedef enum {
  * Identifiers for different sensors and modules in the system.
  */
 typedef enum {
-    SENSOR_LED              = 0x01, // LED control
-    SENSOR_IR               = 0x02, // Infrared sensor
-    SENSOR_ACCELEROMETER   = 0x03, // Accelerometer sensor
-	SENSOR_GPS			   = 0x04,  //GPA sensor
+    SENSOR_LED             = 0x01, // LED control
+    SENSOR_IR              = 0x02, // Infrared sensor
+    SENSOR_ACCEL_MOTION    = 0x03, // Accelerometer, motion samples
+    SENSOR_GPS             = 0x04, // GPS sensor
     SENSOR_BATTERY_CHARGER = 0x05, // Battery charger status
-    SENSOR_RTC              = 0x06,  // Real-time clock
-	INTERRUPTS              = 0x07,
-	SENSOR_ALARM            = 0x08,  // RTC alarm, a time of day
-	SENSOR_SOM              = 0x09   // SOM power rail, Turn OFF only
+    SENSOR_RTC             = 0x06, // Real-time clock
+    INTERRUPTS             = 0x07,
+    SENSOR_ALARM           = 0x08, // RTC alarm, a time of day
+    SENSOR_SOM             = 0x09, // SOM power rail, Turn OFF only
+    SENSOR_ACCEL_TEMP      = 0x0A, // Accelerometer die temperature
 } SensorID_t;
 
 /* Command structure
@@ -69,8 +70,8 @@ typedef struct {
     uint8_t data[];     // Response data
 } I2C_Response_t;
 
-/* maximum length of i2c response (read) including status and data */
-#define I2C_RESP_MAX_LEN  34
+/* Maximum length of i2c response (read) including status and data.*/
+#define I2C_RESP_MAX_LEN  36
 
 /* minimum length of i2c response (read) excluding data */
 #define I2C_RESP_MIN_LEN sizeof(I2C_Response_t)
@@ -84,6 +85,23 @@ typedef struct {
 
 /* ensure gps chunk size agrees with max payload size */
 _Static_assert(GPS_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "GPS_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
+
+/* size of accelerometer payload timebase header*/
+#define ACC_TIMEBASE_LEN sizeof(uint32_t)
+
+/* maximum accelerometer motion data samples per read (payload size) */
+#define ACC_MOTION_SAMPLES_PER_READ 3
+#define ACC_MOTION_CHUNK_MAX (ACC_TIMEBASE_LEN + ACC_MOTION_SAMPLES_PER_READ * sizeof(acc_motionsample_t))
+
+/* ensure accelerometer motion data read size agrees with max payload size */
+_Static_assert(ACC_MOTION_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "ACC_MOTION_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
+
+/* maximum accelerometer temperature samples per read (payload size) */
+#define ACC_TEMP_SAMPLES_PER_READ 1
+#define ACC_TEMP_CHUNK_MAX (ACC_TIMEBASE_LEN + ACC_TEMP_SAMPLES_PER_READ * sizeof(acc_tempsample_t))
+
+/* ensure accelerometer temperature data read size agrees with max payload size */
+_Static_assert(ACC_TEMP_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "ACC_TEMP_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
 
 /* API
  * Processes a received command and prepares a response.

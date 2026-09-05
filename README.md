@@ -38,7 +38,7 @@ This project implements an I2C slave interface on the STM32U031C8 MCU to control
 
 3. Sensor Thresholds & Configuration
 
-    3.1 Accelerometer — events, the axis cache, temperature
+    3.1 Accelerometer — events, sample capture, temperature
 
     3.2 Infrared Sensor (IR)
 
@@ -93,27 +93,27 @@ reads the interrupt status will see the line held low indefinitely.
 
 #### What the interrupt status register contains
 
-`Read interrupt status` (`0x12 0x07`) returns three bytes: a source bitfield,
-followed by one detail byte per source that has one.
+`Read interrupt status` (`0x12 0x07`) returns four bytes: a source bitfield,
+followed by one detail byte for each source that has one. `DATA_LEN` is `4`, so
+read 6.
 
 | Byte | Contents |
 |------|----------|
 | `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer, `0x08` RTC. `0x10` charger is allocated and is never set yet. |
 | `data[1]` | **IR detail** — masked `FUNC_STATUS`: `0x02` motion, `0x04` presence. `0x01` thermal shock is routed off the pin and masked in firmware. |
-| `data[2]` | **Accelerometer detail** — `WAKE_UP_SRC` as the device reports it: `0x01` Z, `0x02` Y, `0x04` X, `0x08` the wake-up flag, `0x20` free-fall, `0x40` sleep change. |
+| `data[2]` | **Accelerometer detail** — `0x01` motion, `0x02` tilt, `0x04` free-fall. |
 | `data[3]` | **RTC detail** — `0x01` alarm A fired. Alarm B, the wakeup timer and tamper are not used and have no bit yet. |
 
 A source occupies its bit whether or not it has a detail byte. `0x01` is raised
 once during init, so the first read after a reset reports it — every threshold the
-master configured is back at its default and needs setting again. Earlier firmware
-gave the master no way to tell a reboot from an idle MCU.
+master configured is back at its default and needs setting again.
 
-`data[0]` was a plain `0` / `1` in earlier firmware. A master testing `!= 0` is
-unaffected; one testing `== 1` now reads that as "the MCU itself".
+`data[0]` is a bitfield, so `0x01` means the MCU itself rather than a generic
+"an interrupt happened".
 
 #### Every byte answers "what fired", never "what is true now"
 
-All three bytes are accumulated latches, and the read clears them. Two sources
+All four bytes are accumulated latches, and the read clears them. Two sources
 firing between reads produce both bits rather than the last one: presence does not
 mask motion, and an accelerometer wake-up does not overwrite an earlier one.
 
@@ -160,9 +160,9 @@ when the write completes, and some commands take a while (see
 
 #### How many bytes to read — read this before writing master code
 
-The slave arms **every** response at the full size of its transmit buffer — 34
-bytes, `2 + 32` — regardless of which command produced it. Any read length from
-1 to 34 bytes therefore completes normally, and a master is free to use one
+The slave arms **every** response at the full size of its transmit buffer — 36
+bytes, `2 + 34` — regardless of which command produced it. Any read length from
+1 to 36 bytes therefore completes normally, and a master is free to use one
 fixed-size read for everything and let `DATA_LEN` say how much of the reply is
 real.
 
@@ -172,11 +172,11 @@ tail holds whatever the previous response left there — NMEA text after a GPS
 read, consumed accelerometer samples after a motion read. Only before the first
 command following a reset is it all zeros, because the buffer lives in `.bss`.
 
-**Reading more than 34 bytes hangs the bus.** Past that the slave runs out of
+**Reading more than 36 bytes hangs the bus.** Past that the slave runs out of
 armed data mid-transfer and keeps stretching SCL; the master sees
 `SCL is stuck low` / `Connection timed out`, and it stays that way until the
 stuck-bus watchdog fires about ten seconds later (see
-[Known Limitations](#4-known-limitations)). 34 is the only limit that matters —
+[Known Limitations](#4-known-limitations)). 36 is the only limit that matters —
 there is no per-command one.
 
 Reading *fewer* bytes than `2 + DATA_LEN` is legitimate rather than merely
@@ -199,8 +199,9 @@ data`) the measured data is then gone from both the buffer and the queue it came
 from.
 
 Per-command lengths are listed in [Response Lengths](#23-response-lengths).
-Where the amount of real data varies: `Read GPS data` pads its payload to a
-constant 32 bytes.
+Where the amount of real data varies the two commands differ: `Read GPS data`
+pads its payload to a constant 32 bytes, while `Read ACC motion data` reports
+the valid byte count in `DATA_LEN` and leaves the rest stale.
 
 ### 2. Command Definitions:
 [Protocol Header](Core/Inc/protocol.h)
@@ -230,8 +231,9 @@ Multi-byte values are little-endian unless stated otherwise.
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
 | Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,6,{int16 presenceVal, int16 motionVal, int16 tAmb}} |
 | Set IR threshold               | {0x13,0x02,0x02,{THS_H,THS_L}}  | {0x00,0x00,{}}                     |
-| Read ACC data                  | {0x12,0x03,0x00,{}}     | {STATUS,9,{reason, int16 x, int16 y, int16 z, int16 temp}} |
-| Set ACC threshold              | {0x13,0x03,0x01,{THS}}  | {STATUS,0x00,{}}                           |
+| Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..3 |
+| Read ACC temperature           | {0x12,0x0A,0x00,{}}     | {0x00,4+6×N,{uint32 now, N × (uint32 timestamp, int16 temp)}}, N = 0..1 |
+| Configure accelerometer        | {0x13,0x03,0x01,{THS}}  | {0x00,0x00,{}} — accepted and ignored      |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,32,{32 raw NMEA bytes}} / {0x01,32,{padding}} if nothing queued |
 | Configure GPS power/reset      | {0x13,0x04,0x02,{RSTN,EN}} | {0x00,0x00,{}}                          |
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,7,{flags, int16 ibat, uint16 vbat, uint16 vbus}} |
@@ -251,34 +253,87 @@ Notes on individual commands:
   temperature, in hundredths of a degree Celsius. It carries no interrupt
   information and clears none — that belongs to `Read interrupt status`. The
   payload is 6 bytes, so read 8.
-- **Read ACC data** returns the event reason byte and the three axes in mg,
-  plus the accelerometer's die temperature in hundredths of a degree Celsius.
-  Payload 9 bytes, so read 11.
+- **Read ACC motion data** opens with a snapshot of the MCU timebase and then
+  hands out captured samples, oldest first, as fixed 10-byte records with no
+  padding:
 
-  The reason byte carries the accelerometer's own event bits: `0x01` Z,
-  `0x02` Y, `0x04` X, `0x08` the wake-up flag, `0x10` tilt, `0x20` free-fall,
-  `0x40` sleep change. They accumulate until the interrupt status is read;
-  this command does **not** clear them.
+  | Byte | Field | Encoding |
+  |------|-------|----------|
+  | 0-3  | now | uint32, 25 µs per LSB, MCU timebase at this read — see below |
+  | 4-7  | timestamp | uint32, same units and timebase, when sample 0 was captured |
+  | 8-9  | x | int16, raw, 0.061 mg/LSB at ±2g |
+  | 10-11 | y | int16, raw |
+  | 12-13 | z | int16, raw |
+  | 14.. | | further samples, 10 bytes each |
 
-  `STATUS` describes the axes, and never withholds them:
+  `DATA_LEN` is `4 + N*10` — `4`, `14`, `24` or `34` — so `(DATA_LEN - 4) / 10`
+  gives the number of samples. A record is never split across two reads.
 
-  | STATUS | Meaning | Axes |
-  |---|---|---|
-  | `0x00` | sample under a second old | valid |
-  | `0x01` | nothing has ever been sampled | zero, ignore |
-  | `0x02` | a real sample, but over a second old | **valid** |
+  **`now` is always present**, including when no samples are waiting, in which
+  case `DATA_LEN` is `4` and the four bytes stand alone. It is sampled once the
+  command has been decoded, so it marks when the master asked.
 
-  `0x02` is the normal answer for a master polling slower than once a second,
-  not an error. Every read asks the sensor for a fresh sample on the way out,
-  so what comes back was taken one poll interval ago. It is still the best
-  value available. See
-  [Why the axes come from a cache](#why-the-axes-come-from-a-cache).
-- **Set ACC threshold** re-runs the whole accelerometer bring-up. `STATUS` is
-  `0x00` on success, otherwise the number of the `ACC_Init()` step that failed,
-  which makes this command the only way to ask whether the sensor is actually
-  configured. Bring-up stops at the first failure and configures wake-up
-  detection before free-fall and tilt, so a mid-sequence failure presents as
-  a working motion detector with those two features mysteriously dead.
+  **`timestamp` is when the sample was captured, on the MCU's own timebase**, in
+  25 µs units. It is absolute, not an age: every read reports the same value for
+  the same sample, and samples from different reads share one scale, so the
+  master can order and space them against each other without tracking which read
+  they arrived in.
+
+  **Age is `now - timestamp`**, in the same 25 µs units, and `now` comes from the
+  same counter in the same response, so no clock of the master's is involved.
+
+  The counter starts when the MCU starts and **wraps every 29.8 hours**. Take
+  differences modulo 2³² and read the result signed — the shorter of the two
+  intervals a difference could stand for is the correct one for anything under
+  14.9 hours old. A sample captured after `now` was sampled reports a small
+  negative age, which is not an error.
+
+  The MCU timebase is not the RTC and carries no calendar meaning, and it does
+  not survive a reset, so timestamps from either side of one are not comparable.
+  A reset is visible as `0x01` in `Read interrupt status`.
+
+  **Consecutive records are not guaranteed one sample period apart.** Samples
+  are dropped when the sensor's FIFO fills before the MCU drains it, which
+  leaves a gap between two records that are then adjacent in the response. Use
+  each record's own `timestamp`; do not reconstruct times by counting records.
+
+  **The read consumes what it returns.** Poll it repeatedly to walk the capture
+  and stop when `DATA_LEN` comes back `4`; each read yields at most 3 samples, so
+  draining a full buffer takes 35 reads. Sending another command before the data
+  has been read loses it — see
+  [How many bytes to read](#how-many-bytes-to-read--read-this-before-writing-master-code).
+
+  `STATUS` is always `0x00`; an empty buffer is reported as `DATA_LEN = 4`, the
+  snapshot alone, not as an error.
+
+  Samples accumulate only while the accelerometer is generating interrupts — the
+  MCU drains the sensor's FIFO from the event handler, not on a timer. The buffer
+  holds 104 samples, 250 ms at the current 416 Hz output data rate; older samples
+  are overwritten. See [Accelerometer](#31-accelerometer).
+- **Read ACC temperature** returns the accelerometer's die temperature and the
+  time it was captured:
+
+  | Byte | Field | Encoding |
+  |------|-------|----------|
+  | 0-3  | now | uint32, 25 µs per LSB, MCU timebase at this read |
+  | 4-7  | timestamp | uint32, same units and timebase, when the reading was captured |
+  | 8-9  | temp | int16, 256 LSB/°C, `0` = 25 °C, so °C = 25 + temp/256 |
+
+  `DATA_LEN` is `10` when a reading is waiting, `4` when none is — none captured
+  since reset, or the last one already read. `now` is present either way.
+  `STATUS` is always `0x00`.
+
+  `timestamp` is on the same MCU timebase as the motion samples, so a
+  temperature can be placed directly against a capture without either read
+  having to happen at any particular time, and its age is `now - timestamp`
+  exactly as for a motion sample.
+
+  **The read consumes the reading**, so a second read returns `DATA_LEN = 4`
+  until the next one arrives. Temperature is batched at 1.6 Hz, so a fresh
+  reading turns up about every 0.6 s.
+
+  The offset is untrimmed at **±15 °C** — see [Temperature](#temperature).
+- **Configure accelerometer** is a placeholder. It discards its payload.
 - **Set daily alarm** takes three binary bytes, 24-hour: hour, minute, second.
   The alarm has **no date** — it matches that time of day, every day, because the
   hardware alarm can compare a day-of-month or a weekday and a time, and nothing
@@ -347,7 +402,8 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x10` / `0x11` (LED on/off) | 2 | immediate |
 | `0x12,0x01` (LED status) | 3 | immediate |
 | `0x12,0x02` (IR data) | 8 | three I2C1 sensor reads |
-| `0x12,0x03` (ACC data) | 11 | immediate — served from RAM, no bus access |
+| `0x12,0x03` (ACC motion data) | 36 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
+| `0x12,0x0A` (ACC temperature) | 12 | immediate — served from RAM, no bus access |
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
 | `0x12,0x05` (battery) | 9 | five I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
@@ -355,7 +411,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x08` (armed alarm) | 5 | immediate |
 | `0x11,0x08` (cancel alarm) | 2 | immediate |
 | `0x11,0x09` (power-off som) | 2 | response immediate, power-off after 1s |
-| `0x13,*` (config) | 2 | IR/ACC re-init: several I2C1 writes; alarm: immediate |
+| `0x13,*` (config) | 2 | IR re-init: several I2C1 writes; ACC and alarm: immediate |
 
 ### 2.4 GPS NMEA Passthrough:
 
@@ -571,94 +627,115 @@ of the last sync, that would be a protocol addition.
 ### 3.1 Accelerometer:
 
 Sensor: ISM330DHCX on I2C1. Wake-up, free-fall and tilt detection all
-routed to INT1, latched.
+routed to INT1.
 
-**Output data rate: 416 Hz**, and not the 104 Hz the code appears to ask
-for. Every `ISM330DHCX_ACC_Enable_*_Detection()` call opens by setting the
-ODR to 416 Hz itself, and those run after `SetOutputDataRate(104.0f)`, so
-416 is what the device has always run at. Full scale ±2g.
+All three are latched in the device, so an event holds until the MCU reads it
+and is reported to the master by `Read interrupt status`.
 
-Events in the reason byte:
+Tilt answers to a **sustained** change of orientation, not a transient one:
+moving the board and returning it leaves the net orientation unchanged and
+reports nothing. Measured: taken from flat to its edge and left there, it
+reports the tilt bit on its own, with no motion bit.
+
+**Output data rate: 416 Hz**, set from `ACC_ODR_HZ`. Full scale ±2g.
+
+#### Sample capture
+
+The sensor's own 3 kB FIFO batches accelerometer samples at the output data
+rate and the die temperature at 1.6 Hz, with a timestamp word every 8th
+sample. The MCU drains it into a 104-sample ring buffer **from the event
+handler** — there is no timer and no polling, so samples accumulate only while
+motion is being detected, and 104 samples is **250 ms** at 416 Hz. `Read ACC
+motion data` hands that ring to the master and touches no bus.
+
+Samples are stamped on the MCU timebase as they leave the FIFO. The drain reads
+that timebase and the sensor's own timestamp counter back to back and adds the
+offset between them to every stamp it reconstructs.
+
+Inside the device only every 8th sample carries a real timestamp; the seven in
+between are interpolated as `anchor + k/ODR`, 96 LSB apart at 416 Hz. Measured
+on hardware over an undisturbed 52-sample capture: every interval exactly 96
+LSB, contiguous across successive reads with no repeats. The sensor's FIFO
+discards its oldest entries once full, so a late drain loses samples and the
+gap falls between two records the master receives back to back.
+
+Events in the accelerometer detail byte of `Read interrupt status`:
 
 | Bit  | Source | Meaning |
 |------|--------|---------|
-| 0x01 | `WAKE_UP_SRC` | wake-up on Z |
-| 0x02 | `WAKE_UP_SRC` | wake-up on Y |
-| 0x04 | `WAKE_UP_SRC` | wake-up on X |
-| 0x08 | `WAKE_UP_SRC` | wake-up asserted |
-| 0x10 | `EMB_FUNC_STATUS_MAINPAGE` | tilt |
-| 0x20 | `WAKE_UP_SRC` | free-fall |
-| 0x40 | `WAKE_UP_SRC` | activity/inactivity state changed |
+| 0x01 | `WAKE_UP_SRC` | motion — any of X, Y, Z over the threshold |
+| 0x02 | `EMB_FUNC_STATUS_MAINPAGE` | tilt |
+| 0x04 | `WAKE_UP_SRC` | free-fall |
+
+Which axis moved is not reported, and bit 3 upwards is unused: the device also
+reports the wake-up axes individually, a wake-up summary and activity-state
+changes, and none of those is configured well enough to act on.
 
 Two registers are read, not one: tilt is an embedded function and reports
 in its own status register. Neither is read through `ALL_INT_SRC`, because
 reading that register clears `WU_IA` before `WAKE_UP_SRC` can be read.
 
-#### Why tilt is there as well as wake-up
+#### Tilt
 
 The wake-up detector runs on the high-passed signal, so it responds to
-*change* and not to position. Tilt the board slowly over a few seconds and
-its orientation changes completely with **no wake-up interrupt at all** —
-the per-sample change never crosses the threshold. Nothing would tell the
-SOM to re-read the axes, and the cached sample would stay correct-looking
-and wrong.
+*change* and not to position: a slow tilt changes the orientation completely
+without crossing the wake-up threshold. Tilt detection covers that case.
 
-ST's tilt function is built for exactly that case. Enabling it needs two
-writes, not one: `tilt_en` in `EMB_FUNC_EN_A` **and** `tilt_init` in
-`EMB_FUNC_INIT_A` (`0x66`). The algorithm does not start on the enable
-alone, and ST's own driver exposes no setter for the init register, so the
-firmware writes it directly. Measured: a slow tilt of about 45° reports
-`reason = 0x10` and nothing else — no wake-up bit at all, which is the
-whole point.
+Enabling it takes two writes: `tilt_en` in `EMB_FUNC_EN_A` and `tilt_init` in
+`EMB_FUNC_INIT_A` (`0x66`). The algorithm does not start on the enable alone,
+and ST's driver exposes no setter for the init register, so the firmware writes
+it directly.
+
+The interrupt is latched with the base functions
+(`ISM330DHCX_ALL_INT_LATCHED`), so the status holds until the MCU reads it.
+That mode is set through the register layer rather than
+`ISM330DHCX_Set_Interrupt_Latch()`, whose `uint8_t` argument rejects anything
+above 1 and so cannot express it.
+
+Measured: a slow change to about 90°, held there, reports the tilt bit and no
+motion bit; a tilt that returns the board to where it started reports nothing;
+reading the status returns the bit once and `0x00` after, and later tilts still
+report.
 
 #### Free-fall
 
-`ff_ia` was already being reported in the reason byte before any of this,
-but nothing ever enabled the detector, so the bit could never be set.
-`ISM330DHCX_ACC_Enable_Free_Fall_Detection()` now runs, with the threshold
-at ST's 312 mg and the duration at 15 samples — 36 ms at 416 Hz.
+`ISM330DHCX_ACC_Enable_Free_Fall_Detection()` runs with the threshold at ST's
+312 mg and the duration at 15 samples, 36 ms at 416 Hz, from
+`ACC_FF_DURATION_MS`. ST's own default is 6 samples.
 
-ST's own default is 6 samples, 14 ms, short enough that a downward flick of
-the wrist can read as a fall. 15 is 2.5× stricter and still only a 0.6 cm
-drop, so any real fall clears it comfortably. The value was chosen to be
-reachable by hand on purpose: a first test that cannot trigger says nothing
-about whether the configuration is right.
+`ff_ia` is reported as `0x04` and, like motion, triggers a FIFO drain.
+Measured: it sets when the board is lifted sharply, alongside the wake-up bits
+from the same movement. The threshold is untuned against a real fall.
 
-**Not yet verified on hardware.** A drop of a centimetre or two caught in
-the hand is not a trustworthy test, and no better one has been run.
+#### Neither read touches the bus
 
-#### Why the axes come from a cache
+Both `Read ACC motion data` and `Read ACC temperature` copy out of RAM,
+including the timestamps: the drain has already read the sensor's counter, and
+the snapshot each read returns comes from the MCU timebase alone.
 
-`Read ACC data` touches no bus. It copies the axes out of RAM and raises
-the `_6AX_INT` EXTI line in software on the way out; the handler samples
-the sensor as soon as the I2C2 callback returns.
+The I2C2 slave callback and the two sensor EXTI handlers all sit at NVIC
+priority 1, so a drain in the event handler cannot collide with a slave
+callback already in progress.
 
-The reason is preemption. The I2C2 slave callback and the two sensor EXTI
-handlers all sit at NVIC priority 1, and all three would otherwise want
-I2C1. Reading the sensor from inside the callback puts two users on that
-bus with nothing sequencing them. Raising the line instead means the sample
-is taken *after* the callback returns, at the same priority, so it can
-never collide with a transfer already in progress — and for the same reason
-it can never land in time for the response being built, which is why the
-axes are always one read behind.
-
-The same argument has not yet been applied to `Read IR data`, which still
-reads I2C1 directly from the callback — three transactions now rather than
-two.
+`Read IR data` reads I2C1 directly from the callback — three transactions —
+and is the exception.
 
 #### Temperature
 
-The die temperature comes back with the axes, in hundredths of a degree
-Celsius: 256 LSB/°C with 0 LSB meaning 25 °C, converted in integer
-arithmetic because this part has no FPU.
+The die temperature comes from the same FIFO as the motion samples, so it
+costs no extra bus transaction. It is reported **raw**, as
+[`Read ACC temperature`](#22-examples) describes: 256 LSB/°C with `0` meaning
+25 °C. The MCU does no conversion.
 
 It is the sensor's own die, not the air. Measured 49.0 °C against the
-STHS34PF80's independent ambient channel at 50.2 °C — two different
-manufacturers' scaling formulas, two places on the board, agreeing to
-within 1.2 °C, which is what confirms both conversions. With a room at
-roughly 25 °C that also says the board runs about 25 °C above ambient.
+STHS34PF80's ambient channel at 50.2 °C, which cross-checks both conversion
+formulas.
 
-Default threshold: ACC_THS_DEFAULT = 0x04
+`Toff` is untrimmed at **±15 °C** part to part, so this channel tracks
+*change* well and absolute temperature poorly. Use `Read IR data`'s ambient
+channel where the absolute number matters.
+
+Wake-up threshold: `ACC_THS_DEFAULT = 0x04`, set at build time.
 
 Trigger values: 0–63 (1 LSB = fraction of ±2g full scale)
 
@@ -784,20 +861,20 @@ Current firmware behaviour the master side should be aware of.
   perform blocking reads on I2C1. A command therefore holds the I2C2 interrupt for
   as long as the sensor access takes. Size the master's I2C timeout accordingly.
   `Read GPS data` is the exception — it copies out of RAM and touches no bus.
-- **A read before any command has been sent** returns 4 bytes of zeros rather
-  than an error, because the response length is initialised to 2.
+- **The MCU timebase is not tied to the RTC and does not survive a reset**, so a
+  timestamp from before a reset is not comparable with one from after. A reset is
+  visible only as `0x01` in `Read interrupt status`.
+- **A read before any command has been sent** returns zeros rather than an error:
+  `STATUS = 0x00`, `DATA_LEN = 0x00`, and a zeroed tail because the transmit
+  buffer starts in `.bss`. It is indistinguishable from a successful command that
+  produced no payload.
 - **`Turn ON` / `Turn OFF` with a sensor ID other than `SENSOR_LED`** return
   `STATUS = 0x00` without doing anything.
-- **Only `Read interrupt status` clears interrupt state.** `Read IR data` no longer
-  carries or clears it, and `Read ACC data` reports the accelerometer's bits
-  without clearing them. Earlier firmware cleared from the value reads too, so
-  whichever command ran first consumed the event.
-
-  The accelerometer handler also used to re-notify the SOM on *every* later
-  interrupt while an unread bit sat in the latch, because it tested the
-  accumulated latch rather than the bits it had just read. It now notifies only
-  on a new event — which is also what lets `Read ACC data` raise the same EXTI
-  line in software for a sample without the SOM being told an event occurred.
+- **Only `Read interrupt status` clears interrupt state.** Neither `Read IR data`
+  nor the accelerometer reads carry or clear it; the accelerometer's event bits
+  are reported solely by `Read interrupt status`. The accelerometer notifies the
+  SOM once per new event, not on every interrupt while an unread bit sits in the
+  latch.
 - **The stuck-bus watchdog fires after ~10 s**, not 10 ms: the counter is
   driven by TIM6 at 1 Hz while the timeout constant is named as milliseconds.
   If the master dies mid-transaction, expect the MCU to be unresponsive for about
@@ -818,13 +895,12 @@ Current firmware behaviour the master side should be aware of.
 - **`Read GPS data` returns partial sentences.** The 32-byte payload is smaller
   than an NMEA sentence with a fix. This is not an error condition and there is no
   flag for it — the master frames on `\n`, as it would on a UART.
-- **The slave hangs the bus if the master over-reads.** There is no
-  "no more data" response; the slave simply stops having bytes and holds SCL.
-  This is why every response has a fixed length, and why the GPS payload is padded
-  instead of shortened. A master that reads `2 + max DATA_LEN` on a variable-length
-  reply will hang the bus intermittently, depending on what happened to be queued.
-  Hardening the slave to arm a full-length buffer for every command, so that
-  over-reads are harmless, is an open item.
+- **The slave hangs the bus if the master reads past 36 bytes.** There is no
+  "no more data" response; the slave simply stops having bytes and holds SCL. It
+  arms the full 36-byte buffer for every command, so any read up to that is
+  harmless, including over-reading a short reply — but the 36-byte ceiling is
+  absolute, and the bytes past `2 + DATA_LEN` are stale rather than padded. See
+  [How many bytes to read](#how-many-bytes-to-read--read-this-before-writing-master-code).
 - **No UBX is parsed.** The firmware reads NMEA only, which means the receiver's
   `fullyResolved` / `confirmedTime` / `tAcc` indications are not available — see
   [Timekeeping](#25-timekeeping).
@@ -832,10 +908,9 @@ Current firmware behaviour the master side should be aware of.
   falling-edge handler, so the master is never told when a condition ends. See
   [Every byte answers "what fired", never "what is true now"](#every-byte-answers-what-fired-never-what-is-true-now).
 
-  An earlier revision of this file claimed `FUNC_STATUS` on the STHS34PF80 is
-  clear-on-read. It is not: `tshock`, `mot` and `pres` are level flags re-evaluated
-  every ODR cycle, and only the `DRDY` bit in `STATUS` (`0x23`) is cleared by being
-  read.
+  `FUNC_STATUS` on the STHS34PF80 is not clear-on-read: `tshock`, `mot` and
+  `pres` are level flags re-evaluated every ODR cycle, and only the `DRDY` bit
+  in `STATUS` (`0x23`) is cleared by being read.
 - **Presence and motion currently return the same value.** The STHS34PF80's filter
   bandwidths (`LPF_M`, `LPF_P`, `LPF_P_M`, `LPF_A_T`) are never configured, so they
   stay at their reset divider and the two algorithm outputs are the same signal.
@@ -845,13 +920,11 @@ Current firmware behaviour the master side should be aware of.
   of the sensor. With a low threshold that settling alone raises a presence
   event.
 
-  An earlier revision of this file blamed `sths34pf80_algo_reset()` never being
-  called. That was wrong, and backwards. `sths34pf80_odr_set()` performs the
-  algorithm reset itself — `odr_safe_set()` calls `reset_algo_bit_set()` on
-  every transition to an operative ODR, with ST's own comment saying so — and
-  `IR_SENSOR_StartContinuous()` sets the ODR last, after every threshold write,
-  which is the order ST asks for. The reset is what *starts* the walk: it zeroes
-  the internal filters, and they then have to charge up to the real signal level.
+  The walk starts with the algorithm reset, which zeroes the internal filters
+  and leaves them to charge up to the real signal level.
+  `sths34pf80_odr_set()` performs that reset itself — `odr_safe_set()` calls
+  `reset_algo_bit_set()` on every transition to an operative ODR — and
+  `IR_SENSOR_StartContinuous()` sets the ODR last, after every threshold write.
 
   What sets the duration is the ODR. Every filter cutoff is a fraction of it,
   `ODR/9` at reset, and the sensor runs at **1 Hz** — a 0.11 Hz cutoff, so
@@ -872,16 +945,22 @@ Current firmware behaviour the master side should be aware of.
   indication.
 - **There is no `HAL_I2C_ErrorCallback`.** An I2C2 error is left to the stuck-bus
   watchdog above rather than being handled where it happens.
-- **`main.c` discards `ACC_Init()`'s return value.** `Set ACC threshold` now
-  reports it, but the boot path still does not, so a sensor that fails to come
-  up at startup is silent until someone asks.
-- **Free-fall detection is configured but unverified.** See
+- **`0x13 0x03` (configure accelerometer) does nothing.** It returns
+  `STATUS = 0x00` and discards its payload. The wake-up threshold is fixed at
+  build time.
+- **Free-fall fires, but the threshold is untuned against a real fall.** It has
+  been seen to set on a sharp lift by hand, which is not the same thing. See
   [Free-fall](#free-fall).
-- **`sleep_change_ia` says the activity state flipped without saying to what.**
-  `SLEEP_STATE` is deliberately left out of the reason byte — it is a state, and
-  a state bit ORed into an accumulating latch would stick there for good — which
-  leaves the change bit uninterpretable on its own. Either report the state in a
-  field of its own, or stop reporting the change.
-- **`Read ACC data` refreshes the cache on every call**, so a master that polls
-  it fast also drives one extra I2C1 transaction per poll. Harmless at human
-  rates; worth knowing before polling it in a tight loop.
+- **Some events the device reports are read and dropped.** The wake-up summary
+  `wu_ia`, the individual `x_wu`/`y_wu`/`z_wu` axes, `sleep_change_ia` and the
+  embedded functions other than tilt are all discarded rather than surfaced, so
+  an event in one of those passes unnoticed.
+- **The sample buffer holds 250 ms at 416 Hz.** 104 samples is a fraction of a
+  captured event, so a master that polls slower than that loses motion. See
+  [Sample capture](#sample-capture).
+- **The FIFO is drained only from the accelerometer interrupt.** A board that is
+  perfectly still produces neither samples nor temperature readings, so `Read ACC
+  temperature` answers `DATA_LEN = 4` indefinitely while nothing moves — it is not
+  a periodic temperature source. Temperature also needs the drained window to
+  contain one of its 1.6 Hz words, so a brief event may yield samples and no
+  temperature at all.

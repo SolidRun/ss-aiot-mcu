@@ -10,7 +10,6 @@
 #include "nmea.h"
 #include <string.h>
 
-extern uint8_t acc_ths;
 extern volatile bool gps_time_synced;
 extern volatile bool gps_time_sync_request;
 
@@ -67,63 +66,47 @@ void Sensor_IR_Config(uint8_t *cmd_data){
 	IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
 }
 
-/* Response is nine bytes:
- *
- *   | Byte | Field  | Encoding                                      |
- *   |------|--------|-----------------------------------------------|
- *   | 0    | reason | event bits, as before this command grew       |
- *   | 1-2  | x      | int16, mg, little-endian                      |
- *   | 3-4  | y      | int16, mg, little-endian                      |
- *   | 5-6  | z      | int16, mg, little-endian                      |
- *   | 7-8  | temp   | int16, hundredths of degC, little-endian      |
- *
- * reason bits: 0x01 Z, 0x02 Y, 0x04 X, 0x08 wake-up, 0x10 tilt,
- * 0x20 free-fall, 0x40 sleep change.
- *
- * Every read also asks the sensor EXTI handler for a new sample, so the
- * axes are the ones the previous read asked for, not this one's.
- *
- * STATUS says how much to trust them, and never withholds them:
- *
- *   0  the sample is under a second old
- *   1  nothing has ever been sampled; the axes are zero and mean nothing
- *   2  the sample is real but over a second old
- *
- * 2 is the normal answer for a master polling slower than a second - the
- * sample is one poll interval old by construction. It is still the best
- * value available, and matters because the cache can fall behind without
- * any interrupt firing: the wake-up detector sees change, not position, so
- * a slow tilt moves the device without waking anything.
- *
- * The reason byte is valid under all three.
- */
-void Sensor_Accel_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
-    int16_t xyz[3] = {0, 0, 0};
-    int16_t temp   = 0;
+void Sensor_Accel_Motion_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
+    /* snapshot the sample timebase */
+    uint32_t timebase = ACC_TimestampNow();
 
-    *len = 9;
-    data[0] = (uint8_t)ACC_getInt();
+    /* little-endian, and the tx buffer is not word aligned */
+    memcpy(&data[0], &timebase, ACC_TIMEBASE_LEN);
 
-    /* the return value is the status byte; the outputs stay zero when 1 */
-    *status = (uint8_t)ACC_GetCachedAxes(xyz, &temp);
+    /* get raw accelerometer samples, max. ACC_MOTION_SAMPLES_PER_READ */
+    size_t n = ACC_TakeMotionSamples((acc_motionsample_t *)&data[ACC_TIMEBASE_LEN],
+                                     ACC_MOTION_SAMPLES_PER_READ);
 
-    data[1] = (uint8_t)((uint16_t)xyz[0] & 0xff);
-    data[2] = (uint8_t)((uint16_t)xyz[0] >> 8);
-    data[3] = (uint8_t)((uint16_t)xyz[1] & 0xff);
-    data[4] = (uint8_t)((uint16_t)xyz[1] >> 8);
-    data[5] = (uint8_t)((uint16_t)xyz[2] & 0xff);
-    data[6] = (uint8_t)((uint16_t)xyz[2] >> 8);
-    data[7] = (uint8_t)((uint16_t)temp   & 0xff);
-    data[8] = (uint8_t)((uint16_t)temp   >> 8);
+    /* calculate length in bytes, snapshot included */
+    *len = (uint8_t)(ACC_TIMEBASE_LEN + n * sizeof(acc_motionsample_t));
+
+    /* this command can't fail and no samples is not an error, set status 0 */
+    *status = 0;
 }
 
-/* Re-runs the whole accelerometer bring-up with a new wake-up threshold.
- * STATUS is 0 on success, otherwise the number of the ACC_Init() step that
- * failed - so this command doubles as a way to ask whether the sensor is
- * actually configured, which nothing could do before. */
+void Sensor_Accel_Temp_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
+    /* snapshot the sample timebase */
+    uint32_t timebase = ACC_TimestampNow();
+
+    /* little-endian, and the tx buffer is not word aligned */
+    memcpy(&data[0], &timebase, ACC_TIMEBASE_LEN);
+
+    /* get one raw die temperature sample */
+    size_t n = ACC_TakeTempSamples((acc_tempsample_t *)&data[ACC_TIMEBASE_LEN],
+                                   ACC_TEMP_SAMPLES_PER_READ);
+
+    /* calculate length in bytes, snapshot included */
+    *len = (uint8_t)(ACC_TIMEBASE_LEN + n * sizeof(acc_tempsample_t));
+
+    /* this command can't fail and no sample is not an error, set status 0 */
+    *status = 0;
+}
+
+/* 0x13 0x03 - placeholder. Accepts and discards its payload; the wake-up
+ * threshold is fixed at ACC_THS_DEFAULT. */
 void Sensor_Accel_Config(uint8_t *cmd_data, uint8_t *status){
-	acc_ths = cmd_data[0];
-	*status = (uint8_t)ACC_Init();
+	(void)cmd_data;
+	*status = 0;
 }
 
 void Sensor_RTC_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
@@ -285,8 +268,11 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
                 case SENSOR_IR:
                     Sensor_IR_Read(resp->data, &resp->data_len, &resp->status);
                     break;
-                case SENSOR_ACCELEROMETER:
-                    Sensor_Accel_Read(resp->data, &resp->data_len, &resp->status);
+                case SENSOR_ACCEL_MOTION:
+                    Sensor_Accel_Motion_Read(resp->data, &resp->data_len, &resp->status);
+                    break;
+                case SENSOR_ACCEL_TEMP:
+                    Sensor_Accel_Temp_Read(resp->data, &resp->data_len, &resp->status);
                     break;
                 case SENSOR_GPS:
                     Sensor_GPS_Read(resp->data, &resp->data_len, &resp->status);
@@ -310,7 +296,7 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         		case SENSOR_IR:
         			Sensor_IR_Config(cmd->data);
         			break;
-        		case SENSOR_ACCELEROMETER:
+        		case SENSOR_ACCEL_MOTION:
         			Sensor_Accel_Config(cmd->data, &resp->status);
         			break;
         		case SENSOR_RTC:
