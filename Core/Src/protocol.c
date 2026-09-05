@@ -211,12 +211,7 @@ void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 void Sensor_GPS_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     uint8_t n = 0;
 
-    /* Fill the whole payload from as many queued sentences as fit. The response
-     * length has to be constant. The master cannot learn DATA_LEN before it
-     * reads, and reading past the armed length leaves the slave stretching SCL
-     * with nothing left to send - the bus hangs until the stuck-bus watchdog
-     * fires seconds later. So the length is fixed and the master always reads
-     * 2 + GPS_CHUNK_MAX. */
+    /* Fill the whole payload from as many queued sentences as fit. */
     while (n < GPS_CHUNK_MAX) {
         uint8_t got = NMEA_Pop(&data[n], (uint8_t)(GPS_CHUNK_MAX - n));
         if (got == 0U) {
@@ -225,17 +220,20 @@ void Sensor_GPS_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
         n += got;
     }
 
-    /* An empty queue is reported in STATUS, not in the length. */
+    /* An empty queue is reported in STATUS. */
     *status = (n > 0U) ? 0U : 1U;
+    /* length indicates real data size, however data is still padded t max length */
+    *len = n;
 
-    /* Pad with newlines - empty lines, which any NMEA framer discards. Padding
+    /*
+     * The protocol demands padding up to GPS_CHUNK_MAX, which allows a master
+     * to use fixed-size reads and ignore data_len field.
+     * Pad with newlines - empty lines, which any NMEA framer discards. Padding
      * can only ever follow a complete sentence: NMEA_Pop returns a partial one
      * only when it filled the payload, and then there is nothing left to pad. */
     while (n < GPS_CHUNK_MAX) {
         data[n++] = (uint8_t)'\n';
     }
-
-    *len = GPS_CHUNK_MAX;
 }
 
 void Sensor_GPS_Config(uint8_t *cmd_data){

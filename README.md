@@ -305,9 +305,11 @@ Notes on individual commands:
 - **Read GPS data** returns **raw NMEA bytes**, not a parsed position. It is a
   passthrough: the MCU does not decode coordinates at all. The payload is **always
   32 bytes** — packed with as many queued sentences as fit and padded with newlines
-  if there were not enough, so `DATA_LEN` is always `0x20` and carries no
-  information. `STATUS = 0x01` means the queue was empty and the 32 bytes are all
-  padding. Always read 34 bytes.
+  if there were not enough. `DATA_LEN` indicates the real length before padding.
+  `STATUS = 0x01` means the queue was empty and the 32 bytes are all
+  padding. Either read 34 bytes, or split the read into two transactions:
+  1. 2 bytes for header, 2. `2 + DATA_LEN` for header with data.
+  Sending a command after short read discards the `DATA_LEN` bytes of data.
   See [GPS NMEA Passthrough](#24-gps-nmea-passthrough) — reading this command
   correctly requires more than the table row above.
 - **Configure GPS power/reset** drives `GPS_RSTN` and `GNSS_PWR_EN`.
