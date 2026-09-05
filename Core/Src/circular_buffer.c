@@ -7,22 +7,11 @@
  * Link: https://github.com/embeddedartistry/embedded-resources/blob/00c1125f1bc3e1369c5022c54dd58eda40834d39/examples/c/circular_buffer/circular_buffer_no_modulo.c
  */
 
-#include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <assert.h>
 
 #include "circular_buffer.h"
-
-// The definition of our circular buffer structure is hidden from the user
-struct circular_buf_t
-{
-	uint8_t* buffer;
-	size_t head;
-	size_t tail;
-	size_t max; // of the buffer
-	bool full;
-};
 
 #pragma mark - Private Functions -
 
@@ -51,11 +40,9 @@ static void advance_head_pointer(cbuf_handle_t me)
 
 #pragma mark - APIs -
 
-cbuf_handle_t circular_buf_init(uint8_t* buffer, size_t size)
+cbuf_handle_t circular_buf_init(circular_buf_t* cbuf, uint8_t* buffer, size_t size)
 {
 	assert(buffer && size);
-
-	cbuf_handle_t cbuf = malloc(sizeof(circular_buf_t));
 	assert(cbuf);
 
 	cbuf->buffer = buffer;
@@ -65,12 +52,6 @@ cbuf_handle_t circular_buf_init(uint8_t* buffer, size_t size)
 	assert(circular_buf_empty(cbuf));
 
 	return cbuf;
-}
-
-void circular_buf_free(cbuf_handle_t me)
-{
-	assert(me);
-	free(me);
 }
 
 void circular_buf_reset(cbuf_handle_t me)

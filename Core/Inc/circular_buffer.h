@@ -12,23 +12,30 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
-/// Opaque circular buffer structure
-typedef struct circular_buf_t circular_buf_t;
+/*
+ * Internal circular buffer structure.
+ * Defined in header so that storage size is known in user code for static
+ * allocation. Use only with circular_buf_init.
+ */
+typedef struct circular_buf_t
+{
+	uint8_t* buffer;
+	size_t head;
+	size_t tail;
+	size_t max; // of the buffer
+	bool full;
+} circular_buf_t;
 
 /// Handle type, the way users interact with the API
 typedef circular_buf_t* cbuf_handle_t;
 
-/// Pass in a storage buffer and size, returns a circular buffer handle
-/// Requires: buffer is not NULL, size > 0 (size > 1 for the threadsafe
+/// Pass in tracking buffer, storage buffer and size, returns a circular buffer handle
+/// Requires: cbuf is not NULL, buffer is not NULL, size > 0 (size > 1 for the threadsafe
 //  version, because it holds size - 1 elements)
 /// Ensures: me has been created and is returned in an empty state
-cbuf_handle_t circular_buf_init(uint8_t* buffer, size_t size);
-
-/// Free a circular buffer structure
-/// Requires: me is valid and created by circular_buf_init
-/// Does not free data buffer; owner is responsible for that
-void circular_buf_free(cbuf_handle_t me);
+cbuf_handle_t circular_buf_init(circular_buf_t* cbuf, uint8_t* buffer, size_t size);
 
 /// Reset the circular buffer to empty, head == tail. Data not cleared
 /// Requires: me is valid and created by circular_buf_init
