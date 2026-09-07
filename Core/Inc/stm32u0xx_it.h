@@ -55,6 +55,7 @@ void RTC_TAMP_IRQHandler(void);
 void EXTI0_1_IRQHandler(void);
 void EXTI4_15_IRQHandler(void);
 void TIM6_DAC_LPTIM1_IRQHandler(void);
+void TIM7_LPTIM2_IRQHandler(void);
 void I2C2_3_IRQHandler(void);
 /* USER CODE BEGIN EFP */
 

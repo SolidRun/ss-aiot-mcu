@@ -20,6 +20,7 @@
 #include "main.h"
 #include "flash.h"
 #include "i2c.h"
+#include "lptim.h"
 #include "rtc.h"
 #include "tim.h"
 #include "usart.h"
@@ -198,6 +199,7 @@ int main(void)
   MX_I2C2_Init();
   MX_USART3_UART_Init();
   MX_TIM6_Init();
+  MX_LPTIM2_Init();
   /* USER CODE BEGIN 2 */
 
   /* change som-enable pin from input to output following initial electrical state */
