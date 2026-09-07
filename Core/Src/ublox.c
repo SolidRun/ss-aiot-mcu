@@ -1,5 +1,6 @@
 #include "ublox.h"
 #include "nmea.h"
+#include "i2c.h"
 #include <string.h>
 
 #define UBLOX_ADDR (0x42 << 1)
@@ -46,15 +47,56 @@ volatile uint32_t ublox_bytes_total;   /* real NMEA bytes since boot   */
 volatile uint32_t ublox_filler_total;  /* 0xFF idle bytes discarded    */
 volatile uint16_t ublox_last_real;     /* real bytes in the last pump  */
 volatile uint32_t ublox_err_count;     /* failed I2C3 transfers        */
+volatile uint32_t ublox_resets;        /* I2C3 recoveries performed    */
+
+/* Consecutive failures before the bus is assumed stuck rather than glitching.
+ *
+ * One failed block is unremarkable and costs nothing but that block. Several in
+ * a row means the peripheral is not going to come back on its own: HAL's
+ * timeout path abandons a transfer without resetting CR2 or generating a STOP,
+ * so a transfer cut short leaves BUSY asserted and every later one fails the
+ * same way, permanently. Nothing else on this bus can recover it - I2C3 carries
+ * only the GNSS, so there is no other master and no slave state machine to
+ * re-arm. */
+#define UBLOX_ERR_BEFORE_RESET  3U
+
+/* Recover a stuck I2C3.
+ *
+ * DeInit/Init both clear PE, which is this peripheral's documented software
+ * reset: it returns the state machine and status bits to their reset values and
+ * releases SCL and SDA. That covers the MCU holding the bus. It cannot help if
+ * the module itself is holding a line down. */
+static void UBlox_ResetBus(void)
+{
+    HAL_I2C_DeInit(&hi2c3);
+    MX_I2C3_Init();
+    ublox_resets++;
+}
 
 /* Read one block of stream. Returns false on I2C error. */
 static bool UBlox_ReadBlock(uint8_t *buf)
 {
+    static uint8_t consecutive_errors;
+
     if (HAL_I2C_Master_Receive(&hi2c3, UBLOX_ADDR, buf, UBLOX_CHUNK,
                                UBLOX_I2C_TIMEOUT) != HAL_OK) {
         ublox_err_count++;
+
+        if (consecutive_errors < UBLOX_ERR_BEFORE_RESET) {
+            consecutive_errors++;
+        }
+
+        if (consecutive_errors >= UBLOX_ERR_BEFORE_RESET) {
+            /* Left saturated, so every further failed block retries the
+             * recovery rather than needing the counter to climb again. */
+            UBlox_ResetBus();
+        }
+
         return false;
     }
+
+    consecutive_errors = 0;
+
     return true;
 }
 
@@ -68,6 +110,7 @@ void UBlox_Init(void)
     ublox_filler_total = 0;
     ublox_last_real    = 0;
     ublox_err_count    = 0;
+    ublox_resets       = 0;
 
     NMEA_Reset();
 

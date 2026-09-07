@@ -33,5 +33,6 @@ extern volatile uint32_t ublox_bytes_total;   /* real NMEA bytes since boot   */
 extern volatile uint32_t ublox_filler_total;  /* 0xFF idle bytes discarded    */
 extern volatile uint16_t ublox_last_real;     /* real bytes in the last pump  */
 extern volatile uint32_t ublox_err_count;     /* failed I2C3 transfers        */
+extern volatile uint32_t ublox_resets;        /* I2C3 recoveries performed    */
 
 #endif
