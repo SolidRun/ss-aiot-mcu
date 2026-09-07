@@ -37,6 +37,7 @@
 #include "rtc.h"
 #include "i2c_slave.h"
 #include "nmea.h"
+#include "timebase.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -201,6 +202,9 @@ int main(void)
   MX_TIM6_Init();
   MX_LPTIM2_Init();
   /* USER CODE BEGIN 2 */
+
+  /* Start the tick counter before anything that timestamps with it. */
+  Timebase_Init();
 
   /* change som-enable pin from input to output following initial electrical state */
   GPIO_InitSomEnablePin();
