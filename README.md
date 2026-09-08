@@ -26,8 +26,8 @@ Sub-devices are plain platform drivers, registered as the following cells:
 | Cell | Function | Named IRQs |
 |------|----------|------------|
 | `ssaiot-sc-led` | LED | - |
-| `ssaiot-sc-ir` | Infrared presence and motion sensor | `motion`, `presence` |
-| `ssaiot-sc-acc` | Accelerometer wake-up | `motion` |
+| `ssaiot-sc-ir` | Infrared presence and motion sensor | `activity`, `presence` |
+| `ssaiot-sc-acc` | Accelerometer | `motion`, `tilt`, `freefall` |
 | `ssaiot-sc-gnss` | GNSS NMEA passthrough | - |
 | `ssaiot-sc-charger` | Battery charger status | - |
 | `ssaiot-sc-rtc` | Real-time clock | - |

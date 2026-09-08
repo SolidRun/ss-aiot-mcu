@@ -59,9 +59,11 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 /* irq api (irq.c) */
 
 enum ssaiot_sc_irq {
-	SSAIOT_SC_IRQ_IR_MOTION = 0,
+	SSAIOT_SC_IRQ_IR_ACTIVITY = 0,
 	SSAIOT_SC_IRQ_IR_PRESENCE,
-	SSAIOT_SC_IRQ_ACC_WAKEUP,
+	SSAIOT_SC_IRQ_ACCEL_MOTION,
+	SSAIOT_SC_IRQ_ACCEL_TILT,
+	SSAIOT_SC_IRQ_ACCEL_FREEFALL,
 	SSAIOT_SC_IRQ_RTC_ALARM,
 	SSAIOT_SC_NUM_IRQS,
 };

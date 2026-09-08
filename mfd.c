@@ -12,12 +12,14 @@
 #include "ssaiot_sc.h"
 
 static const struct resource ssaiot_sc_ir_resources[] = {
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_IR_MOTION, "motion"),
+	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_IR_ACTIVITY, "activity"),
 	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_IR_PRESENCE, "presence"),
 };
 
 static const struct resource ssaiot_sc_acc_resources[] = {
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACC_WAKEUP, "wakeup"),
+	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACCEL_MOTION, "motion"),
+	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACCEL_TILT, "tilt"),
+	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACCEL_FREEFALL, "freefall"),
 };
 
 static const struct resource ssaiot_sc_rtc_resources[] = {
