@@ -48,7 +48,7 @@ static int ssaiot_sc_charger_read(struct ssaiot_sc_priv *sc,
 
 	ret = ssaiot_sc_xfer(sc, SSAIOT_SC_CMD_SENSOR_READ,
 			     SSAIOT_SC_SENSOR_CHARGER, NULL, 0,
-			     (u8 *)state, sizeof(*state), NULL, &status);
+			     (u8 *)state, sizeof(*state), NULL, &status, NULL);
 	if (ret)
 		return ret;
 

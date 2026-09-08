@@ -53,7 +53,7 @@ static int ssaiot_sc_rtc_read_time(struct device *dev, struct rtc_time *tm)
 
 	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_READ,
 			     SSAIOT_SC_SENSOR_RTC, NULL, 0,
-			     (u8 *)&resp, sizeof(resp), NULL, &status);
+			     (u8 *)&resp, sizeof(resp), NULL, &status, NULL);
 	if (ret)
 		return ret;
 
@@ -87,7 +87,7 @@ static int ssaiot_sc_rtc_alarm_cancel(struct ssaiot_sc_rtc *rtc)
 	/* cancelling is its own command, not a magic time */
 	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_OFF,
 			     SSAIOT_SC_SENSOR_ALARM, NULL, 0, NULL, 0,
-			     NULL, &status);
+			     NULL, &status, NULL);
 	if (ret)
 		return ret;
 
@@ -102,7 +102,7 @@ static int ssaiot_sc_rtc_alarm_arm(struct ssaiot_sc_rtc *rtc,
 
 	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_CONFIG,
 			     SSAIOT_SC_SENSOR_ALARM, (const u8 *)time,
-			     sizeof(*time), NULL, 0, NULL, &status);
+			     sizeof(*time), NULL, 0, NULL, &status, NULL);
 	if (ret)
 		return ret;
 
@@ -125,7 +125,7 @@ static int ssaiot_sc_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 
 	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_READ,
 			     SSAIOT_SC_SENSOR_ALARM, NULL, 0,
-			     (u8 *)&resp, sizeof(resp), NULL, &status);
+			     (u8 *)&resp, sizeof(resp), NULL, &status, NULL);
 	if (ret)
 		return ret;
 

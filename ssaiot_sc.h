@@ -7,9 +7,6 @@
 #ifndef _SSAIOT_SC_H_
 #define _SSAIOT_SC_H_
 
-//#include <linux/i2c.h>
-//#include <linux/types.h>
-
 /* transport protocol definitions */
 #define SSAIOT_SC_CMD_HDR_LEN		3	/* CMD + SENSOR_ID + DATA_LEN */
 #define SSAIOT_SC_RESP_HDR_LEN		2	/* STATUS + DATA_LEN */
@@ -57,7 +54,7 @@ struct ssaiot_sc_priv {
 
 int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len,
-		   u8 *rx_len_valid, u8 *status);
+		   u8 *rx_len_valid, u8 *status, s64 *ts);
 
 /* irq api (irq.c) */
 

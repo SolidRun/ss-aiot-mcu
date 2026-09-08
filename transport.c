@@ -7,6 +7,7 @@
 
 #include <linux/i2c.h>
 #include <linux/string.h>
+#include <linux/timekeeping.h>
 
 #include "ssaiot_sc.h"
 
@@ -23,6 +24,8 @@
  *		  require it to equal @rx_len
  * @status: Where to store the in-band STATUS byte, or %NULL to have any status
  *	    other than %SSAIOT_SC_STATUS_OK reported as -EIO
+ * @ts: Where to store a CLOCK_REALTIME stamp of when the transfer began, or
+ *	%NULL if the caller does not need one
  *
  * Issues the 3-byte command header plus @tx_len payload bytes, then reads
  * %SSAIOT_SC_RESP_HDR_LEN + @rx_len bytes back in the same I2C transfer
@@ -44,11 +47,15 @@
  * buffer holds - pass @rx_len_valid and get told how many bytes are theirs.
  * Either way @rx receives all @rx_len bytes that were read.
  *
+ * @ts is for callers timing what the controller reports against a host clock.
+ * It is taken once the bus segment is held rather than on the way in, so that
+ * waiting for another user of the bus does not affect it.
+ *
  * Return: 0 on success, negative errno on failure.
  */
 int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len,
-		   u8 *rx_len_valid, u8 *status)
+		   u8 *rx_len_valid, u8 *status, s64 *ts)
 {
 	u8 tx_buf[SSAIOT_SC_CMD_HDR_LEN + SSAIOT_SC_CMD_MAX_DATA_LEN];
 	u8 rx_buf[SSAIOT_SC_RESP_HDR_LEN + SSAIOT_SC_RESP_MAX_DATA_LEN];
@@ -87,8 +94,25 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 	 * and read. That is what keeps the controller's single global response
 	 * buffer from being observed by anyone but the caller that armed it -
 	 * concurrent callers need no further serialisation here.
+	 *
+	 * Because the power-off handler goes through here too, i2c_lock_bus()
+	 * may not be used unconditionally: that caller runs with interrupts off
+	 * and the other CPUs stopped, where the lock has to be tried rather than
+	 * waited on. i2c_transfer() picks between the two itself, through a
+	 * helper the i2c core keeps private, so the same choice cannot be made
+	 * here.
+	 *
+	 * Take the lock by hand only where a stamp has to be read inside it, and
+	 * let i2c_transfer() handle the locking otherwise.
 	 */
-	ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
+	if (ts) {
+		i2c_lock_bus(client->adapter, I2C_LOCK_SEGMENT);
+		*ts = ktime_get_real_ns();
+		ret = __i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
+		i2c_unlock_bus(client->adapter, I2C_LOCK_SEGMENT);
+	} else {
+		ret = i2c_transfer(client->adapter, msg, ARRAY_SIZE(msg));
+	}
 	if (ret < 0) {
 		dev_err_ratelimited(priv->dev,
 				    "transfer failed for cmd 0x%02x sensor 0x%02x: %d.\n",
