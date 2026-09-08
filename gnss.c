@@ -172,6 +172,15 @@ static int ssaiot_sc_gnss_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/* prepare for shutdown, i.e. release the bus and disable interrupts */
+static void ssaiot_sc_gnss_shutdown(struct platform_device *pdev)
+{
+	struct ssaiot_sc_gnss *gnss = platform_get_drvdata(pdev);
+
+	/* stop work to release the bus */
+	cancel_delayed_work_sync(&gnss->work);
+}
+
 static int ssaiot_sc_gnss_remove(struct platform_device *pdev)
 {
 	struct ssaiot_sc_gnss *gnss = platform_get_drvdata(pdev);
@@ -199,6 +208,7 @@ static struct platform_driver ssaiot_sc_gnss_driver = {
 	},
 	.probe = ssaiot_sc_gnss_probe,
 	.remove = ssaiot_sc_gnss_remove,
+	.shutdown = ssaiot_sc_gnss_shutdown,
 	.id_table = ssaiot_sc_gnss_id_table,
 };
 module_platform_driver(ssaiot_sc_gnss_driver);

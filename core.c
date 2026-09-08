@@ -101,6 +101,15 @@ static int ssaiot_sc_probe(struct i2c_client *client)
 	return 0;
 }
 
+/* prepare for shutdown, i.e. release the bus and disable interrupts */
+static void ssaiot_sc_shutdown(struct i2c_client *client)
+{
+	struct ssaiot_sc_priv *priv = i2c_get_clientdata(client);
+
+	/* disable interrupts */
+	disable_irq(priv->irq);
+}
+
 static const struct of_device_id ssaiot_sc_of_match[] = {
 	{ .compatible = "solidrun,solidsense-aiot-system-controller" },
 	{ },
@@ -121,6 +130,7 @@ static struct i2c_driver ssaiot_sc_driver = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	.probe = ssaiot_sc_probe,
 #endif
+	.shutdown = ssaiot_sc_shutdown,
 };
 module_i2c_driver(ssaiot_sc_driver);
 
