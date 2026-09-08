@@ -50,8 +50,8 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 		   const u8 *tx, u8 tx_len, u8 *rx, u8 rx_len,
 		   u8 *rx_len_valid, u8 *status)
 {
-	u8 tx_buf[SSAIOT_SC_CMD_HDR_LEN + SSAIOT_SC_MAX_DATA_LEN];
-	u8 rx_buf[SSAIOT_SC_RESP_HDR_LEN + SSAIOT_SC_MAX_DATA_LEN];
+	u8 tx_buf[SSAIOT_SC_CMD_HDR_LEN + SSAIOT_SC_CMD_MAX_DATA_LEN];
+	u8 rx_buf[SSAIOT_SC_RESP_HDR_LEN + SSAIOT_SC_RESP_MAX_DATA_LEN];
 	struct i2c_client *client = to_i2c_client(priv->dev);
 	struct i2c_msg msg[] = {
 		{
@@ -69,7 +69,8 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 	u8 resp_status, resp_len;
 	int ret;
 
-	if (tx_len > SSAIOT_SC_MAX_DATA_LEN || rx_len > SSAIOT_SC_MAX_DATA_LEN)
+	if (tx_len > SSAIOT_SC_CMD_MAX_DATA_LEN ||
+	    rx_len > SSAIOT_SC_RESP_MAX_DATA_LEN)
 		return -EMSGSIZE;
 
 	if ((tx_len && !tx) || (rx_len && !rx))

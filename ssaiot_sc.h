@@ -13,7 +13,10 @@
 /* transport protocol definitions */
 #define SSAIOT_SC_CMD_HDR_LEN		3	/* CMD + SENSOR_ID + DATA_LEN */
 #define SSAIOT_SC_RESP_HDR_LEN		2	/* STATUS + DATA_LEN */
-#define SSAIOT_SC_MAX_DATA_LEN		32	/* payload cap of both directions */
+/* largest command payload the controller accepts */
+#define SSAIOT_SC_CMD_MAX_DATA_LEN	32
+/* largest response payload, reading past it stretches SCL and wedges the bus */
+#define SSAIOT_SC_RESP_MAX_DATA_LEN	34
 
 #define SSAIOT_SC_STATUS_OK		0x00
 #define SSAIOT_SC_STATUS_ERROR		0x01
