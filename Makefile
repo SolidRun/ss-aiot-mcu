@@ -20,6 +20,9 @@ ssaiot-sc-charger-y := charger.o
 obj-m += ssaiot-sc-accel.o
 ssaiot-sc-accel-y := accel.o
 
+obj-m += ssaiot-sc-ir.o
+ssaiot-sc-ir-y := ir.o
+
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 PWD := $(CURDIR)
 

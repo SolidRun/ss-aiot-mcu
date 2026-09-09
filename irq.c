@@ -34,9 +34,9 @@
 #define SSAIOT_SC_INT_SRC_RTC		BIT(3)
 #define SSAIOT_SC_INT_SRC_CHARGER	BIT(4)	/* allocated, never set yet */
 
-/* data[1], masked FUNC_STATUS of the IR sensor */
-#define SSAIOT_SC_IR_MOTION		BIT(1)
-#define SSAIOT_SC_IR_PRESENCE		BIT(2)
+/* data[1], IR detail */
+#define SSAIOT_SC_IR_MOTION		BIT(0)
+#define SSAIOT_SC_IR_PRESENCE		BIT(1)
 
 /* data[2], accelerometer detail */
 #define SSAIOT_SC_ACCEL_MOTION		BIT(0)
