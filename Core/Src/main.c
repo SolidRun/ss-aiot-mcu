@@ -258,6 +258,7 @@ int main(void)
 
 	 /* Per-driver high-priority interrupt post-processing. */
 	 ACC_ProcessInt();
+	 IR_ProcessInt();
 
 	 /* Per-driver processing, once per iteration. Each decides for itself whether there is work to do. */
 	 ACC_Process();

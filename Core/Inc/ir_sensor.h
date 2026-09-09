@@ -54,4 +54,7 @@ void IR_HandleInt();
 /* called from main thread periodically */
 void IR_Process(void);
 
+/* called from main thread as soon as possible */
+void IR_ProcessInt(void);
+
 #endif

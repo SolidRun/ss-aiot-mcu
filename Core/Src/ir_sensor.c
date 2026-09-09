@@ -303,23 +303,44 @@ void IR_SENSOR_clearInt()
 	IR_INT = 0;
 }
 
+/* an interrupt has arrived and its reason is not read yet */
+static volatile bool ir_int_pending;
+
+/* MCU timebase tick at which that interrupt was observed */
+static volatile uint32_t ir_int_tick;
+
 /**
- * @brief Read the events and notify the SOM if any fired.
+ * @brief Record that the INT line fired.
  *
  * Called from the EXTI handler, and once directly after
  * GPIO_EnableSensorInterrupts() - the INT pin is push-pull and level-driven,
  * so a condition already asserted when the line comes up produces no rising
  * edge at all and would otherwise never be reported.
- *
- * Stores interrupt reason for later use.
  */
 void IR_HandleInt()
 {
-	int events = IR_ReadEvents();
+	ir_int_tick = Timebase_Now();
+	ir_int_pending = true;
+}
 
-    /* abort on error */
-	if (events < 0)
+/* process pending interrupts outside isr */
+void IR_ProcessInt(void)
+{
+	int events;
+
+	if (!ir_int_pending)
 		return;
+
+	/* clear before the read, so an interrupt arriving during it is kept */
+	ir_int_pending = false;
+
+	events = IR_ReadEvents();
+
+    /* on bus error interrupt may not have been cleared, re-arm as pending */
+	if (events < 0) {
+		ir_int_pending = true;
+		return;
+	}
 
     /* accumulate interrupts */
 	IR_INT |= (uint8_t)events;
