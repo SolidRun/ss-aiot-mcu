@@ -11,7 +11,6 @@
 #include "circular_buffer.h"
 #include "timebase.h"
 
-extern volatile uint8_t IR_INT;
 extern I2C_HandleTypeDef hi2c1;  // CubeMX I2C handle
 //------------------------------------------------------------------------------
 // Private variables
@@ -254,8 +253,8 @@ int IR_SENSOR_DRDY_Status(uint8_t *status)
     return 0;
 }
 
-/* IR events, as IR_SENSOR_getInt() accumulates them and as the SOM sees them
- * in the IR detail byte of Read interrupt status.
+/* IR events, as IR_ProcessInt() reports them and as the SOM sees them in the
+ * IR detail byte of Read interrupt status.
  *
  * The sensor also reports thermal shock, which is routed off the INT pin and
  * not reported; bit 2 upwards is free. */
@@ -291,18 +290,6 @@ static int IR_ReadEvents(void)
     return (int)events;
 }
 
-/* get previously stored interrupt */
-int IR_SENSOR_getInt()
-{
-	return IR_INT;
-}
-
-/* clear previously stored interrupt */
-void IR_SENSOR_clearInt()
-{
-	IR_INT = 0;
-}
-
 /* an interrupt has arrived and its reason is not read yet */
 static volatile bool ir_int_pending;
 
@@ -323,10 +310,15 @@ void IR_HandleInt()
 	ir_int_pending = true;
 }
 
-/* process pending interrupts outside isr */
-void IR_ProcessInt(void)
+/**
+ * @brief Process a pending interrupt outside the isr.
+ * @param detail  receives the IR_EVT_* bits to report to the SOM, 0 for none
+ */
+void IR_ProcessInt(uint8_t *detail)
 {
 	int events;
+
+	*detail = 0;
 
 	if (!ir_int_pending)
 		return;
@@ -342,14 +334,13 @@ void IR_ProcessInt(void)
 		return;
 	}
 
-    /* accumulate interrupts */
-	IR_INT |= (uint8_t)events;
+	if (events == 0)
+		return;
 
-    /* notify on a new event only, not on what is still unread in the latch */
-    if (events) {
-	    SomEnable();
-	    somSetInt(INT_SRC_IR);
-    }
+	/* the SOM has to be powered to receive the notification */
+	SomEnable();
+
+	*detail = (uint8_t)events;
 }
 
 /* samples poll interval */

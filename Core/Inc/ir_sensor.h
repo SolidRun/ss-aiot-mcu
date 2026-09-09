@@ -47,14 +47,12 @@ size_t IR_TakeSamples(ir_sample_t *dst, size_t max_count);
 
 void IR_SENSOR_ConfigINT(void);
 int IR_SENSOR_DRDY_Status(uint8_t *status);
-int IR_SENSOR_getInt();
-void IR_SENSOR_clearInt();
 void IR_HandleInt();
 
 /* called from main thread periodically */
 void IR_Process(void);
 
 /* called from main thread as soon as possible */
-void IR_ProcessInt(void);
+void IR_ProcessInt(uint8_t *detail);
 
 #endif

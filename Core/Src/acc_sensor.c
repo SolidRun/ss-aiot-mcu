@@ -7,7 +7,6 @@
 #include "timebase.h"
 
 extern I2C_HandleTypeDef hi2c1;
-extern volatile uint8_t ACC_INT;
 // Static accelerometer object
 static ISM330DHCX_Object_t ism330dhcx;
 #define ACC_THS_DEFAULT  0x04
@@ -316,7 +315,7 @@ int ACC_ReadAxes(ISM330DHCX_Axes_t *axes) {
     return ISM330DHCX_ACC_GetAxes(&ism330dhcx, axes);
 }
 
-/* Accelerometer events, as ACC_getInt() accumulates them and as the SOM sees
+/* Accelerometer events, as ACC_ProcessInt() reports them and as the SOM sees
  * them in the accelerometer detail byte of Read interrupt status.
  *
  * The device also reports the wake-up axes separately, a wake-up summary and
@@ -362,16 +361,6 @@ static int ACC_ReadEvents(void)
     /* TODO: catch unmapped events */
 
     return (int)events;
-}
-
-int ACC_getInt()
-{
-	return ACC_INT;
-}
-
-void ACC_clearInt()
-{
-	ACC_INT = 0;
 }
 
 /* Drain up to max_entries FIFO entries into RAM buffer, discarding old samples
@@ -497,10 +486,15 @@ void ACC_HandleInt()
 	acc_int_pending = true;
 }
 
-/* process pending interrupts outside isr */
-void ACC_ProcessInt(void)
+/**
+ * @brief Process a pending interrupt outside the isr.
+ * @param detail  receives the ACC_EVT_* bits to report to the SOM, 0 for none
+ */
+void ACC_ProcessInt(uint8_t *detail)
 {
 	int events;
+
+	*detail = 0;
 
 	if (!acc_int_pending)
 		return;
@@ -516,14 +510,13 @@ void ACC_ProcessInt(void)
 		return;
 	}
 
-	/* accumulate interrupts */
-	ACC_INT |= (uint8_t)events;
+	if (events == 0)
+		return;
 
-	/* notify on a new event only, not on what is still unread in the latch */
-	if (events) {
-		SomEnable();
-		somSetInt(INT_SRC_ACCEL);
-	}
+	/* the SOM has to be powered to receive the notification */
+	SomEnable();
+
+	*detail = (uint8_t)events;
 }
 
 /* samples poll interval */

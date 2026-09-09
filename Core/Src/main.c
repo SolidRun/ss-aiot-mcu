@@ -111,16 +111,39 @@ void SomScheduleOff(uint16_t delay_ms) {
 }
 
 
-/* Record an interrupt source and assert the line to the SOM.
+/* Record an interrupt source together with its detail bits, and assert the
+ * line to the SOM. The source bit and its detail byte are set as one
+ * indivisible operation, so a read of the interrupt status never sees one
+ * without the other.
+ *
+ * A zero detail byte means there is nothing to report and the call does
+ * nothing. INT_SRC_MCU carries no detail byte in the response, so it passes
+ * any non-zero value to raise the source on its own.
  */
-void somSetInt(uint8_t source)
+void somSetInt(uint8_t source, uint8_t detail)
 {
-	uint32_t primask = __get_PRIMASK();
+	uint32_t primask;
+
+	/* nothing to report */
+	if (detail == 0)
+		return;
+
+	primask = __get_PRIMASK();
 
 	__disable_irq();
+
 	MCU_INT |= source;
+
+	switch (source) {
+	case INT_SRC_IR:    IR_INT  |= detail; break;
+	case INT_SRC_ACCEL: ACC_INT |= detail; break;
+	case INT_SRC_RTC:   RTC_INT |= detail; break;
+	default: break;      /* INT_SRC_MCU, the source bit is the whole report */
+	}
+
 	/* assert: drive the line low */
 	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_RESET);
+
 	__set_PRIMASK(primask);
 }
 
@@ -232,7 +255,7 @@ int main(void)
   I2C_Slave_Init();
 
   // mcu (re-)start should notify SoM, but not modify current power-state
-  somSetInt(INT_SRC_MCU);
+  somSetInt(INT_SRC_MCU, 0x01U);
   HAL_TIM_Base_Start_IT(&htim6);
   UBlox_Init();          /* discard the GNSS backlog */
   /* USER CODE END 2 */
@@ -256,9 +279,18 @@ int main(void)
 		 led_flag = 0;
 	 }
 
-	 /* Per-driver high-priority interrupt post-processing. */
-	 ACC_ProcessInt();
-	 IR_ProcessInt();
+	 /* Per-driver high-priority interrupt post-processing. A driver handles its
+	  * interrupt on the mcu side and returns the part of it, if any, that the
+	  * SOM is to be notified about. */
+	 {
+		 uint8_t detail;
+
+		 ACC_ProcessInt(&detail);
+		 somSetInt(INT_SRC_ACCEL, detail);
+
+		 IR_ProcessInt(&detail);
+		 somSetInt(INT_SRC_IR, detail);
+	 }
 
 	 /* Per-driver processing, once per iteration. Each decides for itself whether there is work to do. */
 	 ACC_Process();

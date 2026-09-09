@@ -30,7 +30,6 @@
 #define RTC_GPS_SYNC_MAGIC   0x6B1DU
 
 /* Alarm A fired, waiting to be reported in data[3] of the interrupt read. */
-extern volatile uint8_t RTC_INT;
 
 /* Written to RTC_BKP_DR2 while a daily alarm is armed.
  *
@@ -344,8 +343,7 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *handle)
 {
   (void)handle;
 
-  RTC_INT |= 0x01U;          /* alarm A */
   SomEnable();
-  somSetInt(INT_SRC_RTC);
+  somSetInt(INT_SRC_RTC, 0x01U);   /* alarm A */
 }
 /* USER CODE END 1 */

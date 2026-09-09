@@ -63,7 +63,7 @@ void Error_Handler(void);
 void SomEnable(void);
 void SomDisable(void);
 void SomScheduleOff(uint16_t delay_ms);
-void somSetInt(uint8_t source);
+void somSetInt(uint8_t source, uint8_t detail);
 void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc, uint8_t *rtc);
 void resetI2C2(void);
 /* USER CODE END EFP */

@@ -47,15 +47,13 @@ int ACC_ReadAxes(ISM330DHCX_Axes_t *axes);
 
 // Enable DRDY (Data Ready) interrupt on INT1
 int ACC_EnableDRDY(void);
-int ACC_getInt();
-void ACC_clearInt();
 void ACC_HandleInt();
 
 /* called from main thread periodically */
 void ACC_Process(void);
 
 /* called from main thread as soon as possible */
-void ACC_ProcessInt(void);
+void ACC_ProcessInt(uint8_t *detail);
 
 /* one sample of accelerometer motion data, packed to match wire format of i2c protocol */
 typedef struct __attribute__((packed)) {
