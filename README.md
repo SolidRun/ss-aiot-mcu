@@ -100,13 +100,12 @@ read 6.
 | Byte | Contents |
 |------|----------|
 | `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer, `0x08` RTC. `0x10` charger is allocated and is never set yet. |
-| `data[1]` | **IR detail** — masked `FUNC_STATUS`: `0x02` motion, `0x04` presence. `0x01` thermal shock is routed off the pin and masked in firmware. |
+| `data[1]` | **IR detail** — `0x01` motion, `0x02` presence. Thermal shock is routed off the pin and not reported. |
 | `data[2]` | **Accelerometer detail** — `0x01` motion, `0x02` tilt, `0x04` free-fall. |
 | `data[3]` | **RTC detail** — `0x01` alarm A fired. Alarm B, the wakeup timer and tamper are not used and have no bit yet. |
 
 A source occupies its bit whether or not it has a detail byte. `0x01` is raised
-once during init, so the first read after a reset reports it — every threshold the
-master configured is back at its default and needs setting again.
+once during init, so the first read after a reset reports it.
 
 `data[0]` is a bitfield, so `0x01` means the MCU itself rather than a generic
 "an interrupt happened".
@@ -229,11 +228,11 @@ Multi-byte values are little-endian unless stated otherwise.
 | Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
-| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,6,{int16 presenceVal, int16 motionVal, int16 tAmb}} |
-| Set IR threshold               | {0x13,0x02,0x02,{THS_H,THS_L}}  | {0x00,0x00,{}}                     |
+| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb)}}, N = 0..3 |
+| Configure IR                   | {0x13,0x02,0x00,{}}     | {0x00,0x00,{}} — payload ignored            |
 | Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..3 |
 | Read ACC temperature           | {0x12,0x0A,0x00,{}}     | {0x00,4+6×N,{uint32 now, N × (uint32 timestamp, int16 temp)}}, N = 0..1 |
-| Configure accelerometer        | {0x13,0x03,0x01,{THS}}  | {0x00,0x00,{}} — accepted and ignored      |
+| Configure accelerometer        | {0x13,0x03,0x00,{}}     | {0x00,0x00,{}} — payload ignored            |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,32,{32 raw NMEA bytes}} / {0x01,32,{padding}} if nothing queued |
 | Configure GPS power/reset      | {0x13,0x04,0x02,{RSTN,EN}} | {0x00,0x00,{}}                          |
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,7,{flags, int16 ibat, uint16 vbat, uint16 vbus}} |
@@ -247,12 +246,26 @@ Multi-byte values are little-endian unless stated otherwise.
 
 Notes on individual commands:
 
-- **Set IR threshold** takes **two** bytes, big-endian (`THS_H` first). The IR
-  threshold range is 0–32767, so one byte cannot express the useful values.
-- **Read IR data** returns presence, motion and the sensor's own ambient
-  temperature, in hundredths of a degree Celsius. It carries no interrupt
-  information and clears none — that belongs to `Read interrupt status`. The
-  payload is 6 bytes, so read 8.
+- **Configure IR** is a placeholder. It discards its payload.
+- **Read IR data** opens with a snapshot of the MCU timebase and then hands out
+  captured samples, oldest first, as fixed 10-byte records with no padding:
+
+  | Byte | Field | Encoding |
+  |------|-------|----------|
+  | 0-3  | now | uint32, 25 µs per LSB, MCU timebase at this read |
+  | 4-7  | timestamp | uint32, same units and timebase, when sample 0 was read out |
+  | 8-9  | presence | int16, raw algorithm output |
+  | 10-11 | motion | int16, raw algorithm output |
+  | 12-13 | tAmb | int16, ambient temperature, hundredths of °C |
+  | 14.. | | further samples, 10 bytes each |
+
+  `DATA_LEN` is `4 + N*10` — `4`, `14`, `24` or `34` — so `(DATA_LEN - 4) / 10`
+  gives the number of samples. Timestamps follow the same rule as the
+  accelerometer's, and `now` is present even when no samples are waiting.
+
+  **The read consumes what it returns**, and the buffer holds 30 samples. It
+  carries no interrupt information and clears none — that belongs to
+  `Read interrupt status`.
 - **Read ACC motion data** opens with a snapshot of the MCU timebase and then
   hands out captured samples, oldest first, as fixed 10-byte records with no
   padding:
@@ -401,7 +414,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 |---------|---------------|-----------------|
 | `0x10` / `0x11` (LED on/off) | 2 | immediate |
 | `0x12,0x01` (LED status) | 3 | immediate |
-| `0x12,0x02` (IR data) | 8 | three I2C1 sensor reads |
+| `0x12,0x02` (IR data) | 36 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
 | `0x12,0x03` (ACC motion data) | 36 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
 | `0x12,0x0A` (ACC temperature) | 12 | immediate — served from RAM, no bus access |
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
@@ -707,18 +720,16 @@ report.
 Measured: it sets when the board is lifted sharply, alongside the wake-up bits
 from the same movement. The threshold is untuned against a real fall.
 
-#### Neither read touches the bus
+#### No sample read touches the bus
 
-Both `Read ACC motion data` and `Read ACC temperature` copy out of RAM,
-including the timestamps: the drain has already read the sensor's counter, and
-the snapshot each read returns comes from the MCU timebase alone.
+`Read ACC motion data`, `Read ACC temperature` and `Read IR data` all copy out
+of RAM, including the timestamps: the sensor has already been read by the time
+the SOM asks, and the snapshot each read returns comes from the MCU timebase
+alone.
 
 The I2C2 slave callback and the two sensor EXTI handlers all sit at NVIC
-priority 1, so a drain in the event handler cannot collide with a slave
+priority 1, so a sensor read in the event handler cannot collide with a slave
 callback already in progress.
-
-`Read IR data` reads I2C1 directly from the callback — three transactions —
-and is the exception.
 
 #### Temperature
 
@@ -768,15 +779,10 @@ to a single interrupt line (`INT_OR`).
 
 Interrupt code:
 
-| Code | Meaning             |
-|------|-------------------|
-| 0x00 | No motion detected |
-| 0x02 | Motion detected    |
-| 0x04 | Presence detected    |
-
-The firmware reports one code at a time and gives presence priority: if presence
-and motion are flagged together, `0x04` is returned and the motion flag is not
-reported.
+| Bit  | Source | Meaning |
+|------|--------|---------|
+| 0x01 | `FUNC_STATUS.mot_flag` | motion |
+| 0x02 | `FUNC_STATUS.pres_flag` | presence |
 
 `Read IR data` also returns the sensor's own ambient channel, in hundredths
 of a degree Celsius. Sensitivity is 100 LSB/°C, so the raw register value
@@ -809,12 +815,11 @@ Flag cleared when signal < (threshold − hysteresis)
 | 300       | 50         | ≥0.15°C             | Low sensitivity, short range      |
 | 400       | 50         | ≥0.2°C              | Minimal sensitivity, very stable  |
 
-> **The firmware default is `IR_THS_DEFAULT = 1000` (≈0.5 °C), which is outside
-> the table above.** 1000 is the value the board has actually been running and it
-> behaves well — a high threshold means few false triggers. The 100–400 range in
-> the table comes from the sensor sensitivity figure and has not been validated on
-> this hardware. Treat the table as a starting point for tuning, not as tested
-> settings.
+> **The firmware uses `IR_THS_DEFAULT = 1000` (≈0.5 °C), set at build time and
+> outside the table above.** 1000 is the value the board has been running. The
+> 100–400 range in the table comes from the sensor sensitivity figure and has not
+> been validated on this hardware. Treat the table as a starting point for
+> tuning, not as tested settings.
 >
 > The firmware never writes the hysteresis registers, so hysteresis stays at the
 > sensor default of 50. Note that ST pairs 50 with a threshold of 200 — a ratio of
@@ -823,8 +828,7 @@ Flag cleared when signal < (threshold − hysteresis)
 > settles near the threshold. If 1000 is kept, a hysteresis around 250 restores
 > ST's ratio.
 
-Both `PRESENCE_THS` and `MOTION_THS` are written with the same value; the protocol
-has no way to set them independently.
+Both `PRESENCE_THS` and `MOTION_THS` are written with the same value.
 
 
 ### 3.3 Battery Charging:
@@ -860,7 +864,8 @@ Current firmware behaviour the master side should be aware of.
 - **Commands are executed inside the I2C2 interrupt handler**, and most of them
   perform blocking reads on I2C1. A command therefore holds the I2C2 interrupt for
   as long as the sensor access takes. Size the master's I2C timeout accordingly.
-  `Read GPS data` is the exception — it copies out of RAM and touches no bus.
+  The exceptions are `Read GPS data` and the three sample reads, which copy out
+  of RAM and touch no bus.
 - **The MCU timebase is not tied to the RTC and does not survive a reset**, so a
   timestamp from before a reset is not comparable with one from after. A reset is
   visible only as `0x01` in `Read interrupt status`.
@@ -945,6 +950,9 @@ Current firmware behaviour the master side should be aware of.
   indication.
 - **There is no `HAL_I2C_ErrorCallback`.** An I2C2 error is left to the stuck-bus
   watchdog above rather than being handled where it happens.
+- **`0x13 0x02` (configure IR) does nothing.** It returns `STATUS = 0x00` and
+  discards its payload. The presence and motion thresholds are fixed at build
+  time.
 - **`0x13 0x03` (configure accelerometer) does nothing.** It returns
   `STATUS = 0x00` and discards its payload. The wake-up threshold is fixed at
   build time.

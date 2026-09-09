@@ -31,39 +31,30 @@ void Sensor_LED_Read(uint8_t *data, uint8_t *len, uint8_t *status){
 	}
 }
 
-/* Response is six bytes, every field int16 little-endian:
- *
- *   | Byte | Field    | Encoding                                  |
- *   |------|----------|-------------------------------------------|
- *   | 0-1  | presence | raw algorithm output                      |
- *   | 2-3  | motion   | raw algorithm output                      |
- *   | 4-5  | tamb     | ambient temperature, hundredths of degC   |
- *
- * tamb is the STHS34PF80's own ambient channel at 100 LSB/degC, so the raw
- * value already is hundredths - it is passed straight through. Independent
- * of the accelerometer's temperature, which makes the two a cross-check.
- *
- * Note: this runs in the I2C2 slave callback and reads I2C1 directly,
- * which the accelerometer path deliberately no longer does. Three bus
- * transactions here now instead of two. Same class of problem as before,
- * one transaction worse; the IR path wants the same cache treatment.
- */
+/* As Sensor_Accel_Motion_Read: a snapshot of the sample timebase, then up to
+ * IR_SAMPLES_PER_READ buffered samples. */
 void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
-	int16_t presence, motion, tamb;
-    IR_SENSOR_ReadPresence(&presence);
-    IR_SENSOR_ReadMotion(&motion);
-    IR_SENSOR_ReadTAmbient(&tamb);
+    /* snapshot the sample timebase */
+    uint32_t timebase = IR_TimestampNow();
+
+    /* little-endian, and the tx buffer is not word aligned */
+    memcpy(&data[0], &timebase, SAMPLE_TIMEBASE_LEN);
+
+    /* get buffered IR samples, max. IR_SAMPLES_PER_READ */
+    size_t n = IR_TakeSamples((ir_sample_t *)&data[SAMPLE_TIMEBASE_LEN],
+                              IR_SAMPLES_PER_READ);
+
+    /* calculate length in bytes, snapshot included */
+    *len = (uint8_t)(SAMPLE_TIMEBASE_LEN + n * sizeof(ir_sample_t));
+
+    /* this command can't fail and no samples is not an error, set status 0 */
     *status = 0;
-    *len = 6;
-    memcpy(&data[0],  &presence,  sizeof(int16_t));
-    memcpy(&data[2],  &motion,  sizeof(int16_t));
-    memcpy(&data[4],  &tamb,  sizeof(int16_t));
 }
 
+/* 0x13 0x02 - placeholder. Accepts and discards its payload; the presence and
+ * motion thresholds are fixed at IR_THS_DEFAULT. */
 void Sensor_IR_Config(uint8_t *cmd_data){
-	ir_ths = (uint16_t)(((uint16_t)cmd_data[0] << 8) | cmd_data[1]);
-	IR_SENSOR_InitCtx();
-	IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
+	(void)cmd_data;
 }
 
 void Sensor_Accel_Motion_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
@@ -71,14 +62,14 @@ void Sensor_Accel_Motion_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     uint32_t timebase = ACC_TimestampNow();
 
     /* little-endian, and the tx buffer is not word aligned */
-    memcpy(&data[0], &timebase, ACC_TIMEBASE_LEN);
+    memcpy(&data[0], &timebase, SAMPLE_TIMEBASE_LEN);
 
     /* get raw accelerometer samples, max. ACC_MOTION_SAMPLES_PER_READ */
-    size_t n = ACC_TakeMotionSamples((acc_motionsample_t *)&data[ACC_TIMEBASE_LEN],
+    size_t n = ACC_TakeMotionSamples((acc_motionsample_t *)&data[SAMPLE_TIMEBASE_LEN],
                                      ACC_MOTION_SAMPLES_PER_READ);
 
     /* calculate length in bytes, snapshot included */
-    *len = (uint8_t)(ACC_TIMEBASE_LEN + n * sizeof(acc_motionsample_t));
+    *len = (uint8_t)(SAMPLE_TIMEBASE_LEN + n * sizeof(acc_motionsample_t));
 
     /* this command can't fail and no samples is not an error, set status 0 */
     *status = 0;
@@ -89,14 +80,14 @@ void Sensor_Accel_Temp_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     uint32_t timebase = ACC_TimestampNow();
 
     /* little-endian, and the tx buffer is not word aligned */
-    memcpy(&data[0], &timebase, ACC_TIMEBASE_LEN);
+    memcpy(&data[0], &timebase, SAMPLE_TIMEBASE_LEN);
 
     /* get one raw die temperature sample */
-    size_t n = ACC_TakeTempSamples((acc_tempsample_t *)&data[ACC_TIMEBASE_LEN],
+    size_t n = ACC_TakeTempSamples((acc_tempsample_t *)&data[SAMPLE_TIMEBASE_LEN],
                                    ACC_TEMP_SAMPLES_PER_READ);
 
     /* calculate length in bytes, snapshot included */
-    *len = (uint8_t)(ACC_TIMEBASE_LEN + n * sizeof(acc_tempsample_t));
+    *len = (uint8_t)(SAMPLE_TIMEBASE_LEN + n * sizeof(acc_tempsample_t));
 
     /* this command can't fail and no sample is not an error, set status 0 */
     *status = 0;

@@ -8,6 +8,8 @@
 #include "sths34pf80_reg.h"
 #include "main.h" // For hi2c1, HAL_Delay
 #include "stdbool.h"
+#include "circular_buffer.h"
+#include "timebase.h"
 
 extern volatile uint8_t IR_INT;
 extern I2C_HandleTypeDef hi2c1;  // CubeMX I2C handle
@@ -18,6 +20,26 @@ static stmdev_ctx_t ir_sensor_ctx;
 #define IR_THS_DEFAULT  1000U
 #define IR_I2C_TIMEOUT_MS   100U
 uint16_t ir_ths = IR_THS_DEFAULT;
+
+/* Samples are stamped 25us per LSB, so 40000 of them to the second. */
+#define IR_TS_LSB_PER_SEC   40000U
+
+/* IR_TicksTo25us() below hardcodes the ratio of these two constants as
+ * 625/64 instead of referencing them, so pin the contract. */
+_Static_assert(IR_TS_LSB_PER_SEC * 64U == TIMEBASE_HZ * 625U, "625/64 is no longer IR_TS_LSB_PER_SEC / TIMEBASE_HZ");
+
+/* Restate an MCU tick count in 25us units, scaling by 625/64 modulo 2^32.
+ * Truncates by at most 1 LSB. */
+static uint32_t IR_TicksTo25us(uint32_t ticks)
+{
+    return ((ticks >> 6) * 625U) + (((ticks & 0x3FU) * 625U) >> 6);
+}
+
+/* Allocate circular buffer for samples. Enough for 1s at ODR 30Hz or 30s at ODR 1Hz. */
+#define IR_SAMPLE_BUF_SIZE 30U
+static cbuf_handle_t ir_sample_cbuf;
+static struct circular_buf_t ir_sample_cbuf_priv;
+static uint8_t ir_sample_cbuf_stor[IR_SAMPLE_BUF_SIZE * sizeof(ir_sample_t)];
 
 //------------------------------------------------------------------------------
 // Private functions
@@ -44,6 +66,9 @@ static int32_t ir_sensor_read(void *handle, uint8_t reg, uint8_t *data, uint16_t
  */
 void IR_SENSOR_InitCtx()
 {
+    /* initialise samples buffer tracking structures (can't fail, do early) */
+    ir_sample_cbuf = circular_buf_init(&ir_sample_cbuf_priv, ir_sample_cbuf_stor, sizeof(ir_sample_cbuf_stor));
+
     ir_sensor_ctx.write_reg = ir_sensor_write;
     ir_sensor_ctx.read_reg  = ir_sensor_read;
     ir_sensor_ctx.handle    = &hi2c1;  // I2C handle from CubeMX
@@ -129,6 +154,82 @@ int IR_SENSOR_ReadTAmbShock(int16_t *value)
     return sths34pf80_tamb_shock_raw_get(&ir_sensor_ctx, value);
 }
 
+/* Append one sample to the buffer, discards oldest when full. */
+static void IR_SamplePush(const ir_sample_t *sample)
+{
+    /* cast to byte array */
+    const uint8_t *raw = (const uint8_t *)sample;
+
+    /* append to buffer */
+    for (size_t i = 0; i < sizeof(*sample); i++)
+        circular_buf_put(ir_sample_cbuf, raw[i]);
+}
+
+/* Take one complete sample from the buffer if available. */
+static bool IR_SamplePop(ir_sample_t *out)
+{
+    /* cast to byte array */
+    uint8_t *raw = (uint8_t *)out;
+
+    /* ensure there is a complete sample available */
+    if (circular_buf_size(ir_sample_cbuf) < sizeof(*out))
+        return false;
+
+    /* take one sample */
+    for (size_t i = 0; i < sizeof(*out); i++)
+        (void)circular_buf_get(ir_sample_cbuf, &raw[i]);
+
+    return true;
+}
+
+/* Current sample timestamp counter - see the header */
+uint32_t IR_TimestampNow(void)
+{
+    return IR_TicksTo25us(Timebase_Now());
+}
+
+/* Read one sample from the sensor into the buffer, discards oldest when full */
+static int IR_ReadSample(void)
+{
+    ir_sample_t smp;
+    int16_t presence, motion, tambient;
+
+    /* stamp before the reads, which take three I2C1 transactions */
+    smp.timestamp = IR_TimestampNow();
+
+    /* into locals: the fields are packed, so their addresses are unaligned */
+    if (IR_SENSOR_ReadPresence(&presence) != 0)
+        return -1;
+
+    if (IR_SENSOR_ReadMotion(&motion) != 0)
+        return -1;
+
+    if (IR_SENSOR_ReadTAmbient(&tambient) != 0)
+        return -1;
+
+    smp.presence = presence;
+    smp.motion   = motion;
+    smp.tambient = tambient;
+
+    IR_SamplePush(&smp);
+
+    return 1;
+}
+
+/* Take as many samples from buffer as are available and fit destination */
+size_t IR_TakeSamples(ir_sample_t *dst, size_t max_count)
+{
+    size_t count;
+
+    /* drain as many cached samples as available and fit dst */
+    for (count = 0; count < max_count; count++) {
+        if (!IR_SamplePop(&dst[count]))
+            break;
+    }
+
+    return count;
+}
+
 /**
  * @brief Configure INT pin
  */
@@ -153,25 +254,41 @@ int IR_SENSOR_DRDY_Status(uint8_t *status)
     return 0;
 }
 
-/**
- * @brief Read the interrupt flags the sensor is currently asserting.
- * @retval >=0  bitmask of routed FUNC_STATUS bits (0 = nothing pending)
- * @retval  -1  the read failed - the sensor state is unknown
+/* IR events, as IR_SENSOR_getInt() accumulates them and as the SOM sees them
+ * in the IR detail byte of Read interrupt status.
  *
- * Returns a mask rather than a single value: presence and motion can be set
- * together, and the SOM demultiplexes them by bit.
+ * The sensor also reports thermal shock, which is routed off the INT pin and
+ * not reported; bit 2 upwards is free. */
+#define IR_EVT_MOTION       (1U << 0)
+#define IR_EVT_PRESENCE     (1U << 1)
+
+/**
+ * @brief Build the event byte from the sensor's status register.
+ * @retval >=0  IR_EVT_* bits
+ * @retval  -1  a read failed - the sensor state is unknown
+ *
+ * Motion and presence can be set together and are reported together. The
+ * FUNC_STATUS flags are levels, re-evaluated every ODR cycle, and reading the
+ * register clears none of them.
  */
-int CheckInterruptFlags()
+static int IR_ReadEvents(void)
 {
-	uint8_t func_status;
-    static const uint8_t mask = 0x02U | 0x04U; // motion, presence
+    sths34pf80_func_status_t status;
+    uint8_t events = 0;
 
-	if (sths34pf80_read_reg(&ir_sensor_ctx, STHS34PF80_FUNC_STATUS,
-	                        &func_status, 1) != 0) {
-		return -1;
-	}
+    if (sths34pf80_read_reg(&ir_sensor_ctx, STHS34PF80_FUNC_STATUS,
+                            (uint8_t *)&status, 1) != 0)
+        return -1;
 
-	return (int)(func_status & mask);
+    if (status.mot_flag)
+        events |= IR_EVT_MOTION;
+
+    if (status.pres_flag)
+        events |= IR_EVT_PRESENCE;
+
+    /* TODO: catch the bit left unmapped - status.tamb_shock_flag */
+
+    return (int)events;
 }
 
 /* get previously stored interrupt */
@@ -198,17 +315,21 @@ void IR_SENSOR_clearInt()
  */
 void IR_HandleInt()
 {
-	int flags = CheckInterruptFlags();
+	int events = IR_ReadEvents();
 
     /* abort on error */
-	if (flags < 0)
+	if (events < 0)
 		return;
 
     /* accumulate interrupts */
-	IR_INT |= (uint8_t)flags;
+	IR_INT |= (uint8_t)events;
 
-    /* report any interrupts to som */
-    if (IR_INT) {
+    /* notify on a new event only, not on what is still unread in the latch */
+    if (events) {
+	    /* Capture before notifying, so the sample is in RAM by the time the
+	     * SOM asks for it. */
+	    (void)IR_ReadSample();
+
 	    SomEnable();
 	    somSetInt(INT_SRC_IR);
     }
