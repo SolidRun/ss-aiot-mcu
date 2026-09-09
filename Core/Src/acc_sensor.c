@@ -325,8 +325,6 @@ int ACC_ReadAxes(ISM330DHCX_Axes_t *axes) {
 #define ACC_EVT_TILT        (1U << 1)
 #define ACC_EVT_FREEFALL    (1U << 2)
 
-/* events that should capture motion samples */
-#define ACC_EVT_CAPTURE (ACC_EVT_MOTION | ACC_EVT_FREEFALL)
 
 /**
  * @brief Build the event byte from the device's status registers.
@@ -376,8 +374,9 @@ void ACC_clearInt()
 	ACC_INT = 0;
 }
 
-/* Drain device FIFO into RAM buffer, discarding old samples when full. */
-int ACC_DrainFifo(void)
+/* Drain up to max_entries FIFO entries into RAM buffer, discarding old samples
+ * when full. Entries beyond the limit stay in the device FIFO for the next call. */
+static int ACC_DrainFifo(uint16_t max_entries)
 {
     /* Timestamp reconstruction state. Carried across drains: an anchor stays
      * valid until the next one arrives. */
@@ -394,7 +393,7 @@ int ACC_DrainFifo(void)
     /* read the MCU timebase tick counter */
     drain_tick = Timebase_Now();
 
-    /* read the ISM330DHCX timestamp counter, 0.5ms later at 100kHz */
+    /* read the ISM330DHCX timestamp counter, about 0.2ms later at 400kHz, .5ms at 100kHz */
     if (ism330dhcx_timestamp_raw_get(&ism330dhcx.Ctx, &device_now) != ISM330DHCX_OK)
         return -1;
 
@@ -403,6 +402,9 @@ int ACC_DrainFifo(void)
 
     if (ism330dhcx_fifo_data_level_get(&ism330dhcx.Ctx, &level) != ISM330DHCX_OK)
         return -1;
+
+    if (level > max_entries)
+        level = max_entries;
 
     for (i = 0; i < level; i++) {
         ism330dhcx_fifo_tag_t tag;
@@ -496,12 +498,28 @@ void ACC_HandleInt()
 
 	/* notify on a new event only, not on what is still unread in the latch */
 	if (events) {
-		/* Capture before notifying, so the samples are in RAM by the time the
-		 * SOM asks for them. */
-		if (events & ACC_EVT_CAPTURE)
-			(void)ACC_DrainFifo();
-
 		SomEnable();
 		somSetInt(INT_SRC_ACCEL);
 	}
+}
+
+/* samples poll interval */
+#define ACC_POLL_MS          100U
+
+/* maximum poll size, 75ms of I2C1 time at about 325us per entry */
+#define ACC_POLL_MAX_ENTRIES 224U
+
+/* called from main thread periodically */
+void ACC_Process(void)
+{
+    static uint32_t last_poll;
+    static bool first = true;
+
+    if (!first && (HAL_GetTick() - last_poll) < ACC_POLL_MS)
+        return;
+
+    first = false;
+    last_poll = HAL_GetTick();
+
+    (void)ACC_DrainFifo(ACC_POLL_MAX_ENTRIES);
 }

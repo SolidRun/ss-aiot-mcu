@@ -319,10 +319,10 @@ Notes on individual commands:
   `STATUS` is always `0x00`; an empty buffer is reported as `DATA_LEN = 4`, the
   snapshot alone, not as an error.
 
-  Samples accumulate only while the accelerometer is generating interrupts — the
-  MCU drains the sensor's FIFO from the event handler, not on a timer. The buffer
-  holds 104 samples, 250 ms at the current 416 Hz output data rate; older samples
-  are overwritten. See [Accelerometer](#31-accelerometer).
+  The MCU drains the sensor's FIFO every 100 ms from the main loop, so samples
+  accumulate continuously. The buffer holds 104 samples, 250 ms at the current
+  416 Hz output data rate; older samples are overwritten. See
+  [Accelerometer](#31-accelerometer).
 - **Read ACC temperature** returns the accelerometer's die temperature and the
   time it was captured:
 
@@ -656,10 +656,10 @@ reports the tilt bit on its own, with no motion bit.
 
 The sensor's own 3 kB FIFO batches accelerometer samples at the output data
 rate and the die temperature at 1.6 Hz, with a timestamp word every 8th
-sample. The MCU drains it into a 104-sample ring buffer **from the event
-handler** — there is no timer and no polling, so samples accumulate only while
-motion is being detected, and 104 samples is **250 ms** at 416 Hz. `Read ACC
-motion data` hands that ring to the master and touches no bus.
+sample. The MCU drains it into a 104-sample ring buffer **from the main loop**,
+every 100 ms, so samples accumulate continuously whether or not anything is
+moving; 104 samples is **250 ms** at 416 Hz. `Read ACC motion data` hands that
+ring to the master and touches no bus.
 
 Samples are stamped on the MCU timebase as they leave the FIFO. The drain reads
 that timebase and the sensor's own timestamp counter back to back and adds the
@@ -966,9 +966,7 @@ Current firmware behaviour the master side should be aware of.
 - **The sample buffer holds 250 ms at 416 Hz.** 104 samples is a fraction of a
   captured event, so a master that polls slower than that loses motion. See
   [Sample capture](#sample-capture).
-- **The FIFO is drained only from the accelerometer interrupt.** A board that is
-  perfectly still produces neither samples nor temperature readings, so `Read ACC
-  temperature` answers `DATA_LEN = 4` indefinitely while nothing moves — it is not
-  a periodic temperature source. Temperature also needs the drained window to
-  contain one of its 1.6 Hz words, so a brief event may yield samples and no
-  temperature at all.
+- **A motion event is reported before its samples are in RAM.** The interrupt
+  notifies the SOM immediately, but the FIFO is drained on the 100 ms main-loop
+  cadence, so a read that arrives first returns what was captured up to the last
+  drain.
