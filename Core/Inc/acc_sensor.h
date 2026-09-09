@@ -54,6 +54,9 @@ void ACC_HandleInt();
 /* called from main thread periodically */
 void ACC_Process(void);
 
+/* called from main thread as soon as possible */
+void ACC_ProcessInt(void);
+
 /* one sample of accelerometer motion data, packed to match wire format of i2c protocol */
 typedef struct __attribute__((packed)) {
     /*

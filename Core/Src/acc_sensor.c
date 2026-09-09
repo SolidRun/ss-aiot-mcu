@@ -478,8 +478,14 @@ static int ACC_DrainFifo(uint16_t max_entries)
     return pushed;
 }
 
+/* an interrupt has arrived and its reason is not read yet */
+static volatile bool acc_int_pending;
+
+/* MCU timebase tick at which that interrupt was observed */
+static volatile uint32_t acc_int_tick;
+
 /**
- * @brief Read the events and notify the SOM if any fired.
+ * @brief Record that the INT line fired.
  *
  * Called from the EXTI handler, and once directly after
  * GPIO_EnableSensorInterrupts() - the events are latched in the device, so one
@@ -487,11 +493,28 @@ static int ACC_DrainFifo(uint16_t max_entries)
  */
 void ACC_HandleInt()
 {
-	int events = ACC_ReadEvents();
+	acc_int_tick = Timebase_Now();
+	acc_int_pending = true;
+}
 
-	/* abort on error */
-	if (events < 0)
+/* process pending interrupts outside isr */
+void ACC_ProcessInt(void)
+{
+	int events;
+
+	if (!acc_int_pending)
 		return;
+
+	/* clear before the read, so an interrupt arriving during it is kept */
+	acc_int_pending = false;
+
+	events = ACC_ReadEvents();
+
+	/* on bus error interrupt may not have been cleared, re-arm as pending */
+	if (events < 0) {
+		acc_int_pending = true;
+		return;
+	}
 
 	/* accumulate interrupts */
 	ACC_INT |= (uint8_t)events;

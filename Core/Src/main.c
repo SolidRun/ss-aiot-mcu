@@ -256,6 +256,9 @@ int main(void)
 		 led_flag = 0;
 	 }
 
+	 /* Per-driver high-priority interrupt post-processing. */
+	 ACC_ProcessInt();
+
 	 /* Per-driver processing, once per iteration. Each decides for itself whether there is work to do. */
 	 ACC_Process();
 	 BQ25638_Process();
