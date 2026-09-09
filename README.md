@@ -266,6 +266,10 @@ Notes on individual commands:
   **The read consumes what it returns**, and the buffer holds 30 samples. It
   carries no interrupt information and clears none — that belongs to
   `Read interrupt status`.
+
+  The MCU reads one sample every second from the main loop, matching the
+  sensor's 1 Hz output data rate, so 30 samples is 30 s; older samples are
+  overwritten. See [Infrared Sensor](#32-infrared-sensor-ir).
 - **Read ACC motion data** opens with a snapshot of the MCU timebase and then
   hands out captured samples, oldest first, as fixed 10-byte records with no
   padding:
@@ -777,6 +781,11 @@ Threshold (mg) = FS(g) × (threshold / 64) × 1000
 Sensor: STHS34PF80 on I2C1, continuous mode at 1 Hz, presence and motion routed
 to a single interrupt line (`INT_OR`).
 
+The sensor has no FIFO, so the MCU reads one {presence, motion, tAmb} sample
+every second from the main loop into a 30-entry ring buffer, stamped on the MCU
+timebase as it is read. `Read IR data` hands that ring to the master and touches
+no bus.
+
 Interrupt code:
 
 | Bit  | Source | Meaning |
@@ -970,3 +979,6 @@ Current firmware behaviour the master side should be aware of.
   notifies the SOM immediately, but the FIFO is drained on the 100 ms main-loop
   cadence, so a read that arrives first returns what was captured up to the last
   drain.
+- **An IR event is reported before its sample is in RAM.** The same holds for
+  the infrared sensor on its 1 s main-loop cadence, so a `Read IR data` that
+  arrives first returns samples up to a second older than the event.

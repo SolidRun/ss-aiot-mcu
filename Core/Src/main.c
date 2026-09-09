@@ -261,6 +261,7 @@ int main(void)
 
 	 /* Per-driver processing, once per iteration. Each decides for itself whether there is work to do. */
 	 ACC_Process();
+	 IR_Process();
 	 BQ25638_Process();
 
 	 /* Drain the GNSS on a fixed cadence. Measured output is ~370 B/s with no

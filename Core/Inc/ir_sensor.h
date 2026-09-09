@@ -51,4 +51,7 @@ int IR_SENSOR_getInt();
 void IR_SENSOR_clearInt();
 void IR_HandleInt();
 
+/* called from main thread periodically */
+void IR_Process(void);
+
 #endif

@@ -304,7 +304,7 @@ void IR_SENSOR_clearInt()
 }
 
 /**
- * @brief Sample the sensor and notify the SOM if anything is pending.
+ * @brief Read the events and notify the SOM if any fired.
  *
  * Called from the EXTI handler, and once directly after
  * GPIO_EnableSensorInterrupts() - the INT pin is push-pull and level-driven,
@@ -326,11 +326,25 @@ void IR_HandleInt()
 
     /* notify on a new event only, not on what is still unread in the latch */
     if (events) {
-	    /* Capture before notifying, so the sample is in RAM by the time the
-	     * SOM asks for it. */
-	    (void)IR_ReadSample();
-
 	    SomEnable();
 	    somSetInt(INT_SRC_IR);
     }
+}
+
+/* samples poll interval */
+#define IR_POLL_MS 1000U
+
+/* called from main thread periodically */
+void IR_Process(void)
+{
+    static uint32_t last_poll;
+    static bool first = true;
+
+    if (!first && (HAL_GetTick() - last_poll) < IR_POLL_MS)
+        return;
+
+    first = false;
+    last_poll = HAL_GetTick();
+
+    (void)IR_ReadSample();
 }
