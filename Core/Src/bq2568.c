@@ -2,6 +2,16 @@
 
 extern I2C_HandleTypeDef hi2c1; // I2C handle from CubeMX
 
+/* status polling interval */
+#define BQ25638_POLL_MS 1000U
+
+/* cache the last status read, double-buffered to avoid artial updates interrupted by slave callback */
+static struct {
+    BQ25638_Status_t status[2];
+    bool valid[2];
+    volatile uint8_t active_slot;
+} bq25638_cache;
+
 // I2C Basic Functions
 
 // Write one byte to a register
@@ -170,7 +180,41 @@ HAL_StatusTypeDef BQ25638_GetStatus(BQ25638_Status_t *out) {
     return HAL_OK;
 }
 
+/* called from main thread periodically */
+void BQ25638_Process(void)
+{
+    static uint32_t last_read;
+    static bool first = true;
+    uint8_t next;
 
+    if (!first && (HAL_GetTick() - last_read) < BQ25638_POLL_MS)
+        return;
+
+    first = false;
+    last_read = HAL_GetTick();
+
+    /* fill the slot nobody is reading */
+    next = bq25638_cache.active_slot ^ 1U;
+    bq25638_cache.valid[next] = (BQ25638_GetStatus(&bq25638_cache.status[next]) == HAL_OK);
+
+    /* complete stores above before updating slot */
+    __COMPILER_BARRIER();
+
+    bq25638_cache.active_slot = next;
+}
+
+/* get last cached status (must not be pre-empted by BQ25638_Process) */
+bool BQ25638_GetLastStatus(BQ25638_Status_t *out)
+{
+    uint8_t active = bq25638_cache.active_slot;
+
+    if (!bq25638_cache.valid[active])
+        return false;
+
+    *out = bq25638_cache.status[active];
+
+    return true;
+}
 
 uint8_t BQ25638_GetChargeStatus(void) {
     uint8_t status;

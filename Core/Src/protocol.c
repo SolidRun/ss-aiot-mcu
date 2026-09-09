@@ -161,11 +161,12 @@ void Sensor_Alarm_Read(uint8_t *data, uint8_t *len, uint8_t *status)
         *status = 1;
 }
 
+/* Pass through the reading BQ25638_Process() cached, no bus access. */
 void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *len = 7;
     BQ25638_Status_t BQ_status;
 
-    if (BQ25638_GetStatus(&BQ_status) == HAL_OK) {
+    if (BQ25638_GetLastStatus(&BQ_status)) {
         /* The three measurements are 16-bit, little-endian, low byte first.
          * ibat is signed - two's complement, as the charger reports it. */
         data[0] = BQ_status.flags;
@@ -177,7 +178,8 @@ void Sensor_Charger_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
         data[6] = (uint8_t)(BQ_status.vbus >> 8);
         *status = 0;
     } else {
-        /* On error return non-zero status, data is now invalid and master must discard it. */
+        /* The last read failed or none has been taken yet, data is invalid
+         * and master must discard it. */
         *status = 1;
     }
 }

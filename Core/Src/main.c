@@ -256,6 +256,9 @@ int main(void)
 		 led_flag = 0;
 	 }
 
+	 /* Per-driver processing, once per iteration. Each decides for itself whether there is work to do. */
+	 BQ25638_Process();
+
 	 /* Drain the GNSS on a fixed cadence. Measured output is ~370 B/s with no
 	  * fix and two to three times that with one, so a 20 ms gap accumulates a
 	  * few dozen bytes at most and the module's buffer never builds up. */

@@ -1,6 +1,8 @@
 #ifndef BQ25638_H
 #define BQ25638_H
 
+#include <stdbool.h>
+
 #include "stm32u0xx_hal.h"
 #include "main.h"
 
@@ -93,6 +95,17 @@ HAL_StatusTypeDef BQ25638_SetTerminationCurrent(uint16_t mA);
  * Returns HAL_OK only when every field is valid. On failure *out may have been
  * partly written and hould not be used. */
 HAL_StatusTypeDef BQ25638_GetStatus(BQ25638_Status_t *out);
+
+/* Refresh the cached reading from the charger, at most once every
+ * BQ25638_POLL_MS. Call from the main loop; it touches I2C1. */
+void BQ25638_Process(void);
+
+/* Copy the cached reading into *out, false if the last read failed or none has
+ * been taken yet.
+ *
+ * The charger reports state rather than events, so the reading is not consumed:
+ * the same one comes back until BQ25638_Process() replaces it. */
+bool BQ25638_GetLastStatus(BQ25638_Status_t *out);
 
 uint8_t BQ25638_GetChargeStatus(void);
 uint8_t BQ25638_GetFault(void);
