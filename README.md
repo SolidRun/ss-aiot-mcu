@@ -159,11 +159,12 @@ when the write completes, and some commands take a while (see
 
 #### How many bytes to read — read this before writing master code
 
-The slave arms **every** response at the full size of its transmit buffer — 36
-bytes, `2 + 34` — regardless of which command produced it. Any read length from
-1 to 36 bytes therefore completes normally, and a master is free to use one
-fixed-size read for everything and let `DATA_LEN` say how much of the reply is
-real.
+The slave arms **every** response at the full size of its transmit buffer — 257
+bytes, `STATUS`, `DATA_LEN` and 255 of payload — regardless of which command
+produced it. Any read length from 1 to 257 bytes therefore completes normally,
+and a master is free to use one fixed-size read for everything and let
+`DATA_LEN` say how much of the reply is real. The longest reply any command
+actually produces is 86 bytes.
 
 **Bytes past `2 + DATA_LEN` are meaningless and must be discarded.** They are
 not padding and not zeros: the buffer is never cleared between commands, so the
@@ -171,11 +172,11 @@ tail holds whatever the previous response left there — NMEA text after a GPS
 read, consumed accelerometer samples after a motion read. Only before the first
 command following a reset is it all zeros, because the buffer lives in `.bss`.
 
-**Reading more than 36 bytes hangs the bus.** Past that the slave runs out of
+**Reading more than 257 bytes hangs the bus.** Past that the slave runs out of
 armed data mid-transfer and keeps stretching SCL; the master sees
 `SCL is stuck low` / `Connection timed out`, and it stays that way until the
 stuck-bus watchdog fires about ten seconds later (see
-[Known Limitations](#4-known-limitations)). 36 is the only limit that matters —
+[Known Limitations](#4-known-limitations)). 257 is the only limit that matters —
 there is no per-command one.
 
 Reading *fewer* bytes than `2 + DATA_LEN` is legitimate rather than merely
@@ -213,11 +214,12 @@ Command structure:
 Response structure:
 | STATUS (1B) | DATA_LEN (1B) | DATA (N Bytes) |
 
-`STATUS`: `0x00` = OK, `0x01` = error (unknown command, unknown sensor ID,
-`DATA_LEN` too large, or a command-specific failure documented below).
+`STATUS`: `0x00` = OK, `0x01` = error (unknown command, unknown sensor ID, or a
+command-specific failure documented below).
 
-`DATA_LEN` in a command is capped at 32 (the payload size of `I2C_Command_t`).
-A larger value is rejected with `STATUS = 0x01` and no payload is read.
+`DATA_LEN` is one byte in both directions and the buffers cover its whole range,
+so a payload of up to 255 is always accepted on a write and always readable on a
+read. There is no length a master can put in the field that the slave rejects.
 
 Multi-byte values are little-endian unless stated otherwise.
 
@@ -228,9 +230,9 @@ Multi-byte values are little-endian unless stated otherwise.
 | Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
-| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb)}}, N = 0..3 |
+| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb)}}, N = 0..5 |
 | Configure IR                   | {0x13,0x02,0x00,{}}     | {0x00,0x00,{}} — payload ignored            |
-| Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..3 |
+| Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..8 |
 | Read ACC temperature           | {0x12,0x0A,0x00,{}}     | {0x00,4+6×N,{uint32 now, N × (uint32 timestamp, int16 temp)}}, N = 0..1 |
 | Configure accelerometer        | {0x13,0x03,0x00,{}}     | {0x00,0x00,{}} — payload ignored            |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,32,{32 raw NMEA bytes}} / {0x01,32,{padding}} if nothing queued |
@@ -259,9 +261,8 @@ Notes on individual commands:
   | 12-13 | tAmb | int16, ambient temperature, hundredths of °C |
   | 14.. | | further samples, 10 bytes each |
 
-  `DATA_LEN` is `4 + N*10` — `4`, `14`, `24` or `34` — so `(DATA_LEN - 4) / 10`
-  gives the number of samples. Timestamps follow the same rule as the
-  accelerometer's, and `now` is present even when no samples are waiting.
+  `DATA_LEN` is `4 + N*10`, from `4` to `54` — so `(DATA_LEN - 4) / 10` gives
+  the number of samples. Timestamps follow the same rule as the accelerometer's, and `now` is present even when no samples are waiting.
 
   **The read consumes what it returns**, and the buffer holds 30 samples. It
   carries no interrupt information and clears none — that belongs to
@@ -283,8 +284,8 @@ Notes on individual commands:
   | 12-13 | z | int16, raw |
   | 14.. | | further samples, 10 bytes each |
 
-  `DATA_LEN` is `4 + N*10` — `4`, `14`, `24` or `34` — so `(DATA_LEN - 4) / 10`
-  gives the number of samples. A record is never split across two reads.
+  `DATA_LEN` is `4 + N*10`, from `4` to `84` — so `(DATA_LEN - 4) / 10` gives
+  the number of samples. A record is never split across two reads.
 
   **`now` is always present**, including when no samples are waiting, in which
   case `DATA_LEN` is `4` and the four bytes stand alone. It is sampled once the
@@ -315,8 +316,8 @@ Notes on individual commands:
   each record's own `timestamp`; do not reconstruct times by counting records.
 
   **The read consumes what it returns.** Poll it repeatedly to walk the capture
-  and stop when `DATA_LEN` comes back `4`; each read yields at most 3 samples, so
-  draining a full buffer takes 35 reads. Sending another command before the data
+  and stop when `DATA_LEN` comes back `4`; each read yields at most 8 samples, so
+  draining a full buffer takes 13 reads. Sending another command before the data
   has been read loses it — see
   [How many bytes to read](#how-many-bytes-to-read--read-this-before-writing-master-code).
 
@@ -418,8 +419,8 @@ Total bytes the master should read (`2 + DATA_LEN`):
 |---------|---------------|-----------------|
 | `0x10` / `0x11` (LED on/off) | 2 | immediate |
 | `0x12,0x01` (LED status) | 3 | immediate |
-| `0x12,0x02` (IR data) | 36 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
-| `0x12,0x03` (ACC motion data) | 36 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
+| `0x12,0x02` (IR data) | 56 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
+| `0x12,0x03` (ACC motion data) | 86 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
 | `0x12,0x0A` (ACC temperature) | 12 | immediate — served from RAM, no bus access |
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
 | `0x12,0x05` (battery) | 9 | five I2C1 register reads |
@@ -909,10 +910,10 @@ Current firmware behaviour the master side should be aware of.
 - **`Read GPS data` returns partial sentences.** The 32-byte payload is smaller
   than an NMEA sentence with a fix. This is not an error condition and there is no
   flag for it — the master frames on `\n`, as it would on a UART.
-- **The slave hangs the bus if the master reads past 36 bytes.** There is no
+- **The slave hangs the bus if the master reads past 257 bytes.** There is no
   "no more data" response; the slave simply stops having bytes and holds SCL. It
-  arms the full 36-byte buffer for every command, so any read up to that is
-  harmless, including over-reading a short reply — but the 36-byte ceiling is
+  arms the full 257-byte buffer for every command, so any read up to that is
+  harmless, including over-reading a short reply — but the 257-byte ceiling is
   absolute, and the bytes past `2 + DATA_LEN` are stale rather than padded. See
   [How many bytes to read](#how-many-bytes-to-read--read-this-before-writing-master-code).
 - **No UBX is parsed.** The firmware reads NMEA only, which means the receiver's

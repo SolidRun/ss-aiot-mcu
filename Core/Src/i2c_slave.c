@@ -12,6 +12,10 @@ extern I2C_HandleTypeDef hi2c2;
 
 #define I2C_SLAVE_ADDR 0x18
 
+/* The receive path arms whatever data_len asks for, so the buffer has to cover
+ * the field's whole range. */
+_Static_assert(I2C_CMD_MAX_PAYLOAD >= UINT8_MAX, "rxBuffer cannot hold every data_len a master can send");
+
 static uint8_t rxBuffer[I2C_CMD_MAX_LEN];
 static I2C_Command_t *rxCommand = (void *)rxBuffer;
 static uint8_t txBuffer[I2C_RESP_MAX_LEN];
@@ -21,8 +25,6 @@ static I2C_Response_t *txResponse = (void *)txBuffer;
 static size_t rxcount = 0;
 /* number of bytes the slave was last armed for */
 static size_t expected_bytes = I2C_CMD_MIN_LEN;
-/* flag for dropping received data on invalid commands, clear on address match */
-static bool command_invalid = false;
 
 /* ---------------------------------------------------------------------
  * STUCK BUS RECOVERY
@@ -119,7 +121,6 @@ void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection, ui
             /* Master will send data to slave, arm for size of command without payload */
             rxcount = 0;
             expected_bytes = I2C_CMD_MIN_LEN;
-            command_invalid = false;
             HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxBuffer, expected_bytes , I2C_LAST_FRAME);
         }
         else
@@ -144,32 +145,11 @@ void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef *hi2c) {
         /* when we get here we have received exactly the armed number of bytes, count them */
         rxcount += expected_bytes;
 
-        if (command_invalid) {
-            /* after invalid header always arm receive to avoid stalling the bus till master stops */
-            HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxCommand->data, expected_bytes, I2C_LAST_FRAME);
-            return;
-        }
-
         if (rxcount == I2C_CMD_MIN_LEN) {
             /* we received just received the header, no data (or stop) yet */
             if (rxCommand->data_len > 0) {
-                /* command should have payload */
-
-                if (rxCommand->data_len <= I2C_CMD_MAX_PAYLOAD) {
-                    /* prepare to receive payload data exact length */
-                    expected_bytes = rxCommand->data_len;
-                } else {
-                    /*
-                     * Command is invalid but there is no easy way out.
-                     * Prepare to receive more data and set error flag.
-                     */
-                    expected_bytes = I2C_CMD_MAX_PAYLOAD;
-                    command_invalid = true;
-
-                    /* prepare error response in case master cares */
-                    txResponse->status = 1;
-                    txResponse->data_len = 0;
-                }
+                /* prepare to receive payload data exact length */
+                expected_bytes = rxCommand->data_len;
 
                 /* arm to receive data payload */
                 HAL_I2C_Slave_Seq_Receive_IT(hi2c, rxCommand->data, expected_bytes, I2C_LAST_FRAME);
