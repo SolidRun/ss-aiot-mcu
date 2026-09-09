@@ -43,9 +43,10 @@ uint8_t acc_ths = ACC_THS_DEFAULT;
  */
 #define ACC_WAKE_UP_DURATION 0U
 
-/* The device timestamp counts 25us per LSB, so 40000 of them to the second.
- * ACC_TS_LSB_PER_SAMPLE stamps the samples that fall between two batched
- * timestamps - 96 at 416Hz, 769 at 52Hz. */
+/* The device timestamp counts a nominal 25us per LSB, so 40000 of them to the
+ * second. ODR and counter run off the same oscillator, so their ratio holds
+ * whatever that oscillator actually does; ACC_TS_LSB_PER_SAMPLE stamps the
+ * samples that fall between two batched timestamps - 96 at 416Hz, 769 at 52Hz. */
 #define ACC_TS_LSB_PER_SEC     40000U
 #define ACC_TS_LSB_PER_SAMPLE  (ACC_TS_LSB_PER_SEC / ACC_ODR_HZ)
 
@@ -58,6 +59,40 @@ _Static_assert(ACC_TS_LSB_PER_SEC * 64U == TIMEBASE_HZ * 625U, "625/64 is no lon
 static uint32_t ACC_TicksTo25us(uint32_t ticks)
 {
     return ((ticks >> 6) * 625U) + (((ticks & 0x3FU) * 625U) >> 6);
+}
+
+/* Pairing of the two timebases, taken at the start of every drain. */
+static uint32_t acc_ts_pair_mcu;   /* MCU timebase, 25us units */
+static uint32_t acc_ts_pair_dev;   /* ISM330DHCX timestamp counter */
+static bool     acc_ts_pair_valid;
+
+/* Scale from ISM330DHCX timestamp counts to MCU 25us units, Q16.
+ *
+ * The device counter is nominally the same 25us per LSB as the MCU side, but
+ * runs off the device oscillator, measured several percent fast and moving
+ * with die temperature. Successive pairings give the live ratio; a pairing
+ * interval longer than 1.6s, or a ratio outside the clamp, is discarded. */
+#define ACC_TS_SCALE_ONE       (1UL << 16)
+#define ACC_TS_SCALE_MIN       ((ACC_TS_SCALE_ONE * 85U) / 100U)
+#define ACC_TS_SCALE_MAX       ((ACC_TS_SCALE_ONE * 115U) / 100U)
+#define ACC_TS_PAIR_MAX_UNITS  0xFFFFU
+static uint32_t acc_ts_scale = ACC_TS_SCALE_ONE;
+
+/* Restate an ISM330DHCX timestamp count on the MCU timebase, in 25us units,
+ * against the pairing taken at the start of this drain.
+ *
+ * The multiply cannot overflow: the FIFO holds at most 438 entries whatever
+ * the delay before a drain, so a count is at most some 37000 behind the
+ * pairing, and the scale is clamped below 1.15. */
+static uint32_t ACC_DeviceToMcu(uint32_t count)
+{
+    int32_t back = (int32_t)(acc_ts_pair_dev - count);
+
+    /* a sample batched after the pairing was read sits ahead of it */
+    if (back < 0)
+        return acc_ts_pair_mcu + (((uint32_t)-back * acc_ts_scale) >> 16);
+
+    return acc_ts_pair_mcu - (((uint32_t)back * acc_ts_scale) >> 16);
 }
 
 /* Allocate circular buffer for samples. Enough for 250ms at ODR 416Hz or 2s at ODR 52Hz */
@@ -375,19 +410,32 @@ static int ACC_DrainFifo(uint16_t max_entries)
     uint16_t level;
     uint16_t i;
     int pushed = 0;
-    uint32_t drain_tick;
+    uint32_t mcu_now;
     uint32_t device_now;
-    uint32_t ts_offset;
 
     /* read the MCU timebase tick counter */
-    drain_tick = Timebase_Now();
+    mcu_now = ACC_TicksTo25us(Timebase_Now());
 
     /* read the ISM330DHCX timestamp counter, about 0.2ms later at 400kHz, .5ms at 100kHz */
     if (ism330dhcx_timestamp_raw_get(&ism330dhcx.Ctx, &device_now) != ISM330DHCX_OK)
         return -1;
 
-    /* offset from the ISM330DHCX timebase to the MCU timebase, 25us units */
-    ts_offset = ACC_TicksTo25us(drain_tick) - device_now;
+    /* refresh the scale from the previous pairing, then take this one */
+    if (acc_ts_pair_valid) {
+        uint32_t d_mcu = mcu_now - acc_ts_pair_mcu;
+        uint32_t d_dev = device_now - acc_ts_pair_dev;
+
+        if ((d_dev != 0U) && (d_mcu <= ACC_TS_PAIR_MAX_UNITS)) {
+            uint32_t scale = (d_mcu << 16) / d_dev;
+
+            if ((scale >= ACC_TS_SCALE_MIN) && (scale <= ACC_TS_SCALE_MAX))
+                acc_ts_scale = scale;
+        }
+    }
+
+    acc_ts_pair_mcu = mcu_now;
+    acc_ts_pair_dev = device_now;
+    acc_ts_pair_valid = true;
 
     if (ism330dhcx_fifo_data_level_get(&ism330dhcx.Ctx, &level) != ISM330DHCX_OK)
         return -1;
@@ -429,7 +477,7 @@ static int ACC_DrainFifo(uint16_t max_entries)
             /* interpolate from the anchor, then shift onto the MCU timebase */
             stamp = acc_ts_anchor;
             stamp += (uint32_t)acc_ts_offset * ACC_TS_LSB_PER_SAMPLE;
-            stamp += ts_offset;
+            stamp = ACC_DeviceToMcu(stamp);
 
             smp.timestamp = stamp;
             smp.x = (int16_t)(((uint16_t)raw[1] << 8) | raw[0]);
@@ -449,7 +497,7 @@ static int ACC_DrainFifo(uint16_t max_entries)
             /* interpolate from the anchor, then shift onto the MCU timebase */
             stamp = acc_ts_anchor;
             stamp += (uint32_t)acc_ts_offset * ACC_TS_LSB_PER_SAMPLE;
-            stamp += ts_offset;
+            stamp = ACC_DeviceToMcu(stamp);
 
             acc_tempsample.temp = (int16_t)(((uint16_t)raw[1] << 8) | raw[0]);
             acc_tempsample.timestamp = stamp;
