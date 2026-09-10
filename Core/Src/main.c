@@ -46,6 +46,7 @@ extern volatile bool sensors_ready;
 volatile uint8_t IR_INT;
 volatile uint8_t ACC_INT;
 volatile uint8_t MCU_INT;
+volatile uint8_t INT_SOURCES;
 volatile uint8_t RTC_INT;
 volatile bool gps_time_synced = false;      // GPS time was successfully synchronized
 volatile bool gps_time_sync_request = false; // Request to try GPS time synchronization
@@ -115,8 +116,8 @@ void SomScheduleOff(uint16_t delay_ms) {
  *
  * en_sources gates whole sources and pwr_sources selects which of the sources
  * that got through power the SOM up, so the two source masks sit together;
- * en_ir/en_acc/en_rtc gate the individual events within a source, in the order
- * of the detail bytes of the interrupt status read.
+ * en_mcu/en_ir/en_acc/en_rtc gate the individual events within a source, one
+ * per source bit in order.
  *
  * The defaults report everything and reproduce the power behaviour the
  * firmware had before the command existed: a sensor or alarm event brings the
@@ -125,13 +126,14 @@ void SomScheduleOff(uint16_t delay_ms) {
 static volatile struct {
 	uint8_t en_sources;
 	uint8_t pwr_sources;
+	uint8_t en_mcu;
 	uint8_t en_ir;
 	uint8_t en_acc;
 	uint8_t en_rtc;
 } int_cfg = {
 	0xFFU,
 	INT_SRC_IR | INT_SRC_ACCEL | INT_SRC_RTC,
-	0xFFU, 0xFFU, 0xFFU,
+	0xFFU, 0xFFU, 0xFFU, 0xFFU,
 };
 
 /* Report the interrupt configuration, INT_CONFIG_LEN bytes in wire order.
@@ -140,9 +142,10 @@ void somGetIntConfig(uint8_t *out)
 {
 	out[0] = int_cfg.en_sources;
 	out[1] = int_cfg.pwr_sources;
-	out[2] = int_cfg.en_ir;
-	out[3] = int_cfg.en_acc;
-	out[4] = int_cfg.en_rtc;
+	out[2] = int_cfg.en_mcu;
+	out[3] = int_cfg.en_ir;
+	out[4] = int_cfg.en_acc;
+	out[5] = int_cfg.en_rtc;
 }
 
 /* Replace the interrupt configuration, INT_CONFIG_LEN bytes in wire order.
@@ -158,9 +161,10 @@ void somSetIntConfig(const uint8_t *in)
 
 	int_cfg.en_sources  = in[0];
 	int_cfg.pwr_sources = in[1];
-	int_cfg.en_ir       = in[2];
-	int_cfg.en_acc      = in[3];
-	int_cfg.en_rtc      = in[4];
+	int_cfg.en_mcu      = in[2];
+	int_cfg.en_ir       = in[3];
+	int_cfg.en_acc      = in[4];
+	int_cfg.en_rtc      = in[5];
 
 	__set_PRIMASK(primask);
 }
@@ -180,10 +184,11 @@ void somSetInt(uint8_t source, uint8_t detail)
 
 	/* keep only the events this source is configured to report */
 	switch (source) {
+	case INT_SRC_MCU:   detail &= int_cfg.en_mcu; break;
 	case INT_SRC_IR:    detail &= int_cfg.en_ir;  break;
 	case INT_SRC_ACCEL: detail &= int_cfg.en_acc; break;
 	case INT_SRC_RTC:   detail &= int_cfg.en_rtc; break;
-	default: break;      /* INT_SRC_MCU has no events to select from */
+	default: break;      /* no other source is defined */
 	}
 
 	/* nothing to report */
@@ -202,13 +207,14 @@ void somSetInt(uint8_t source, uint8_t detail)
 
 	__disable_irq();
 
-	MCU_INT |= source;
+	INT_SOURCES |= source;
 
 	switch (source) {
+	case INT_SRC_MCU:   MCU_INT |= detail; break;
 	case INT_SRC_IR:    IR_INT  |= detail; break;
 	case INT_SRC_ACCEL: ACC_INT |= detail; break;
 	case INT_SRC_RTC:   RTC_INT |= detail; break;
-	default: break;      /* INT_SRC_MCU, the source bit is the whole report */
+	default: break;      /* no other source is defined */
 	}
 
 	/* assert: drive the line low */
@@ -217,24 +223,27 @@ void somSetInt(uint8_t source, uint8_t detail)
 	__set_PRIMASK(primask);
 }
 
-/* Snapshot and clear all three interrupt latches, and release the line to the
- * SOM, as one indivisible operation.
+/* Snapshot and clear the source bitmap and every detail latch, and release the
+ * line to the SOM, as one indivisible operation.
  */
-void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc, uint8_t *rtc)
+void somTakeInterrupts(uint8_t *sources, uint8_t *mcu, uint8_t *ir, uint8_t *acc,
+                       uint8_t *rtc)
 {
 	uint32_t primask = __get_PRIMASK();
 
 	__disable_irq();
 
-	*mcu = (uint8_t)MCU_INT;
-	*ir  = (uint8_t)IR_INT;
-	*acc = (uint8_t)ACC_INT;
-	*rtc = (uint8_t)RTC_INT;
+	*sources = (uint8_t)INT_SOURCES;
+	*mcu     = (uint8_t)MCU_INT;
+	*ir      = (uint8_t)IR_INT;
+	*acc     = (uint8_t)ACC_INT;
+	*rtc     = (uint8_t)RTC_INT;
 
-	MCU_INT = 0;
-	IR_INT  = 0;
-	ACC_INT = 0;
-	RTC_INT = 0;
+	INT_SOURCES = 0;
+	MCU_INT     = 0;
+	IR_INT      = 0;
+	ACC_INT     = 0;
+	RTC_INT     = 0;
 
 	/* deassert: release the line back to the external pull-up */
 	HAL_GPIO_WritePin(MCU_INT_GPIO_Port, MCU_INT_Pin, GPIO_PIN_SET);
@@ -325,7 +334,7 @@ int main(void)
   I2C_Slave_Init();
 
   // mcu (re-)start should notify SoM, but not modify current power-state
-  somSetInt(INT_SRC_MCU, 0x01U);
+  somSetInt(INT_SRC_MCU, INT_MCU_RESTART);
   HAL_TIM_Base_Start_IT(&htim6);
   UBlox_Init();          /* discard the GNSS backlog */
   /* USER CODE END 2 */

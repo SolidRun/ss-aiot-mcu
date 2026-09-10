@@ -93,26 +93,26 @@ reads the interrupt status will see the line held low indefinitely.
 
 #### What the interrupt status register contains
 
-`Read interrupt status` (`0x12 0x07`) returns four bytes: a source bitfield,
-followed by one detail byte for each source that has one. `DATA_LEN` is `4`, so
-read 6.
+`Read interrupt status` (`0x12 0x07`) returns five bytes: a source bitfield,
+followed by one detail byte per source. `DATA_LEN` is `5`, so read 7.
 
 | Byte | Contents |
 |------|----------|
-| `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer, `0x08` RTC. `0x10` charger is allocated and is never set yet. |
-| `data[1]` | **IR detail** — `0x01` motion, `0x02` presence. Thermal shock is routed off the pin and not reported. |
-| `data[2]` | **Accelerometer detail** — `0x01` motion, `0x02` tilt, `0x04` free-fall. |
-| `data[3]` | **RTC detail** — `0x01` alarm A fired. Alarm B, the wakeup timer and tamper are not used and have no bit yet. |
+| `data[0]` | **Sources.** `0x01` the MCU itself, `0x02` IR, `0x04` accelerometer, `0x08` RTC. |
+| `data[1]` | **MCU detail** — `0x01` the firmware started or restarted. |
+| `data[2]` | **IR detail** — `0x01` motion, `0x02` presence. Thermal shock is routed off the pin and not reported. |
+| `data[3]` | **Accelerometer detail** — `0x01` motion, `0x02` tilt, `0x04` free-fall. |
+| `data[4]` | **RTC detail** — `0x01` alarm A fired. Alarm B, the wakeup timer and tamper are not used and have no bit yet. |
 
-A source occupies its bit whether or not it has a detail byte. `0x01` is raised
-once during init, so the first read after a reset reports it.
+The MCU raises `0x01` in both `data[0]` and `data[1]` once during init, so the
+first read after a reset reports the source and the restart as its reason.
 
 `data[0]` is a bitfield, so `0x01` means the MCU itself rather than a generic
 "an interrupt happened".
 
 #### Every byte answers "what fired", never "what is true now"
 
-All four bytes are accumulated latches, and the read clears them. Two sources
+All five bytes are accumulated latches, and the read clears them. Two sources
 firing between reads produce both bits rather than the last one: presence does not
 mask motion, and an accelerometer wake-up does not overwrite an earlier one.
 
@@ -240,9 +240,9 @@ Multi-byte values are little-endian unless stated otherwise.
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,7,{flags, int16 ibat, uint16 vbat, uint16 vbus}} |
 | Read current time              | {0x12,0x06,0x00,{}}     | {0x00,6,{YY,MM,DD,HH,MM,SS}}              |
 | Sync RTC from GPS              | {0x13,0x06,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,4,{SOURCES, IR, ACC, RTC}}            |
-| Read interrupt config          | {0x13,0x07,0x00,{}}     | {0x00,5,{EN_SOURCES, PWR_SOURCES, EN_IR, EN_ACC, EN_RTC}} |
-| Set interrupt config           | {0x13,0x07,0x05,{EN_SOURCES, PWR_SOURCES, EN_IR, EN_ACC, EN_RTC}} | {0x00,5,{EN_SOURCES, PWR_SOURCES, EN_IR, EN_ACC, EN_RTC}} |
+| Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,5,{SOURCES, MCU, IR, ACC, RTC}}       |
+| Read interrupt config          | {0x13,0x07,0x00,{}}     | {0x00,6,{EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC}} |
+| Set interrupt config           | {0x13,0x07,0x06,{EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC}} | {0x00,6,{EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC}} |
 | Set daily alarm                | {0x13,0x08,0x03,{HH,MM,SS}} | {0x00,0x00,{}}                         |
 | Cancel alarm                   | {0x11,0x08,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,3,{HH,MM,SS}}                        |
@@ -310,7 +310,7 @@ Notes on individual commands:
 
   The MCU timebase is not the RTC and carries no calendar meaning, and it does
   not survive a reset, so timestamps from either side of one are not comparable.
-  A reset is visible as `0x01` in `Read interrupt status`.
+  A reset is visible as `0x01` in the MCU detail byte of `Read interrupt status`.
 
   **Consecutive records are not guaranteed one sample period apart.** Samples
   are dropped when the sensor's FIFO fills before the MCU drains it, which
@@ -378,25 +378,26 @@ Notes on individual commands:
   It is the only command that clears interrupt state, and the only one that releases
   the `MCU_INT` line.
 - **Interrupt config** is one command for both directions. An empty payload
-  reads the configuration, a five-byte payload replaces it. The response carries
+  reads the configuration, a six-byte payload replaces it. The response carries
   the configuration in effect after the command:
 
   | Byte | Field | Meaning |
   |------|-------|---------|
   | 0 | `EN_SOURCES` | which sources may be reported at all, same bits as `SOURCES` |
   | 1 | `PWR_SOURCES` | which of the reported sources also power the SOM on, same bits as `SOURCES` |
-  | 2 | `EN_IR` | which IR events may be reported, same bits as the IR detail byte |
-  | 3 | `EN_ACC` | which accelerometer events may be reported, same bits as the ACC detail byte |
-  | 4 | `EN_RTC` | which RTC events may be reported, same bits as the RTC detail byte |
+  | 2 | `EN_MCU` | which MCU events may be reported, same bits as the MCU detail byte |
+  | 3 | `EN_IR` | which IR events may be reported, same bits as the IR detail byte |
+  | 4 | `EN_ACC` | which accelerometer events may be reported, same bits as the ACC detail byte |
+  | 5 | `EN_RTC` | which RTC events may be reported, same bits as the RTC detail byte |
 
   An event is reported when it passes its detail mask and its source bit in
   `EN_SOURCES`. One that does not is neither latched nor reported. `PWR_SOURCES`
   applies to events that passed both masks.
 
-  Defaults after reset are `0xFF, 0x0E, 0xFF, 0xFF, 0xFF`: every event reported,
-  and IR, accelerometer and RTC alarm power the SOM up.
+  Defaults after reset are `0xFF, 0x0E, 0xFF, 0xFF, 0xFF, 0xFF`: every event
+  reported, and IR, accelerometer and RTC alarm power the SOM up.
 
-  `STATUS = 0x01` means the payload was neither empty nor five bytes; the
+  `STATUS = 0x01` means the payload was neither empty nor six bytes; the
   configuration is unchanged and `DATA_LEN` is `0`. The configuration lives in
   RAM and does not survive an MCU reset.
 - **Read GPS data** returns **raw NMEA bytes**, not a parsed position. It is a
@@ -449,8 +450,8 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
 | `0x12,0x05` (battery) | 9 | five I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
-| `0x12,0x07` (interrupt status) | 6 | immediate — snapshots RAM latches, no bus access |
-| `0x13,0x07` (interrupt config) | 7 | immediate |
+| `0x12,0x07` (interrupt status) | 7 | immediate — snapshots RAM latches, no bus access |
+| `0x13,0x07` (interrupt config) | 8 | immediate |
 | `0x12,0x08` (armed alarm) | 5 | immediate |
 | `0x11,0x08` (cancel alarm) | 2 | immediate |
 | `0x11,0x09` (power-off som) | 2 | response immediate, power-off after 1s |
@@ -903,7 +904,7 @@ Current firmware behaviour the master side should be aware of.
   of RAM and touch no bus.
 - **The MCU timebase is not tied to the RTC and does not survive a reset**, so a
   timestamp from before a reset is not comparable with one from after. A reset is
-  visible only as `0x01` in `Read interrupt status`.
+  visible as `0x01` in the source and MCU detail bytes of `Read interrupt status`.
 - **A read before any command has been sent** returns zeros rather than an error:
   `STATUS = 0x00`, `DATA_LEN = 0x00`, and a zeroed tail because the transmit
   buffer starts in `.bss`. It is indistinguishable from a successful command that

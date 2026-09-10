@@ -96,8 +96,9 @@ _Static_assert(I2C_RESP_MAX_PAYLOAD
 /* ensure gps chunk size agrees with max payload size */
 _Static_assert(GPS_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "GPS_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
 
-/* interrupt configuration payload, {EN_SOURCES, EN_IR, EN_ACC, EN_RTC, PWR_SOURCES} */
-#define INT_CONFIG_LEN 5U
+/* interrupt configuration payload,
+ * {EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC} */
+#define INT_CONFIG_LEN 6U
 
 /* ensure the interrupt configuration fits a response and a command */
 _Static_assert(INT_CONFIG_LEN <= I2C_RESP_MAX_PAYLOAD, "INT_CONFIG_LEN > I2C_RESP_MAX_PAYLOAD");

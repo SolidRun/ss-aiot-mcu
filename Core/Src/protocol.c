@@ -221,8 +221,8 @@ void Sensor_GPS_Config(uint8_t *cmd_data){
 }
 
 void INT_Read(uint8_t *data, uint8_t *len) {
-    *len = 4;
-    somTakeInterrupts(&data[0], &data[1], &data[2], &data[3]);
+    *len = 5;
+    somTakeInterrupts(&data[0], &data[1], &data[2], &data[3], &data[4]);
 }
 
 /* 0x13 0x07 - read or replace the interrupt configuration.

@@ -48,7 +48,9 @@ extern "C" {
 #define INT_SRC_IR       0x02U   /* STHS34PF80,  detail in data[1]          */
 #define INT_SRC_ACCEL    0x04U   /* ISM330DHCX,  detail in data[2]          */
 #define INT_SRC_RTC      0x08U   /* RTC alarm,   detail in data[3]          */
-#define INT_SRC_CHARGER  0x10U   /* reserved, never set yet                 */
+
+/* MCU events, reported in the MCU detail byte of the interrupt read. */
+#define INT_MCU_RESTART  0x01U   /* the firmware started or restarted       */
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
@@ -66,7 +68,8 @@ void SomScheduleOff(uint16_t delay_ms);
 void somSetInt(uint8_t source, uint8_t detail);
 void somGetIntConfig(uint8_t *out);
 void somSetIntConfig(const uint8_t *in);
-void somTakeInterrupts(uint8_t *mcu, uint8_t *ir, uint8_t *acc, uint8_t *rtc);
+void somTakeInterrupts(uint8_t *sources, uint8_t *mcu, uint8_t *ir, uint8_t *acc,
+                       uint8_t *rtc);
 void resetI2C2(void);
 /* USER CODE END EFP */
 
