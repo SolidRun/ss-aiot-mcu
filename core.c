@@ -107,6 +107,9 @@ static void ssaiot_sc_shutdown(struct i2c_client *client)
 {
 	struct ssaiot_sc_priv *priv = i2c_get_clientdata(client);
 
+	/* stop the controller reporting its own restart, needs the bus */
+	ssaiot_sc_irq_shutdown(priv);
+
 	/* disable interrupts */
 	disable_irq(priv->irq);
 }

@@ -55,9 +55,12 @@ static_assert(sizeof(struct ssaiot_sc_accel_temp_resp) <= SSAIOT_SC_RESP_MAX_DAT
 #define SSAIOT_SC_ACCEL_TEMP_IDLE_MS 1000
 
 /* detectors the controller reports, and the channel address each event uses */
-#define SSAIOT_SC_ACCEL_EV_MOTION 0
-#define SSAIOT_SC_ACCEL_EV_TILT 1
-#define SSAIOT_SC_ACCEL_EV_FREEFALL 2
+enum ssaiot_sc_accel_ev {
+	SSAIOT_SC_ACCEL_EV_MOTION = 0,
+	SSAIOT_SC_ACCEL_EV_TILT,
+	SSAIOT_SC_ACCEL_EV_FREEFALL,
+	SSAIOT_SC_ACCEL_EV_MAX,
+};
 
 /* scan indices of the axes, and their positions in the scan below */
 #define SSAIOT_SC_ACCEL_X 0
@@ -76,8 +79,9 @@ struct ssaiot_sc_accel_motion {
 		aligned_s64 timestamp;
 	} scan;
 
-	/* which detectors userspace asked to hear about */
+	/* which detectors userspace asked to hear about, and their interrupts */
 	unsigned long events;
+	int event_irq[SSAIOT_SC_ACCEL_EV_MAX];
 };
 
 /* temperature channel */
@@ -220,48 +224,41 @@ static int ssaiot_sc_accel_motion_read_raw(struct iio_dev *indio_dev,
 	}
 }
 
-/* report one detector, if userspace is listening for it */
-static irqreturn_t ssaiot_sc_accel_event(struct iio_dev *indio_dev,
-					 unsigned int ev, u64 code)
+/* report one detector */
+static irqreturn_t ssaiot_sc_accel_event(struct iio_dev *indio_dev, u64 code)
 {
-	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
-
-	if (test_bit(ev, &motion->events))
-		iio_push_event(indio_dev, code, iio_get_time_ns(indio_dev));
+	iio_push_event(indio_dev, code, iio_get_time_ns(indio_dev));
 
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t ssaiot_sc_accel_motion_event(int irq, void *data)
 {
-	return ssaiot_sc_accel_event(data, SSAIOT_SC_ACCEL_EV_MOTION,
-				     IIO_MOD_EVENT_CODE(IIO_ACCEL, 0,
-							IIO_MOD_X_OR_Y_OR_Z,
-							IIO_EV_TYPE_MAG_ADAPTIVE,
-							IIO_EV_DIR_RISING));
+	return ssaiot_sc_accel_event(data, IIO_MOD_EVENT_CODE(IIO_ACCEL, 0,
+							      IIO_MOD_X_OR_Y_OR_Z,
+							      IIO_EV_TYPE_MAG_ADAPTIVE,
+							      IIO_EV_DIR_RISING));
 }
 
 static irqreturn_t ssaiot_sc_accel_tilt_event(int irq, void *data)
 {
-	return ssaiot_sc_accel_event(data, SSAIOT_SC_ACCEL_EV_TILT,
-				     IIO_UNMOD_EVENT_CODE(IIO_INCLI, 0,
-							  IIO_EV_TYPE_CHANGE,
-							  IIO_EV_DIR_EITHER));
+	return ssaiot_sc_accel_event(data, IIO_UNMOD_EVENT_CODE(IIO_INCLI, 0,
+								IIO_EV_TYPE_CHANGE,
+								IIO_EV_DIR_EITHER));
 }
 
 static irqreturn_t ssaiot_sc_accel_freefall_event(int irq, void *data)
 {
-	return ssaiot_sc_accel_event(data, SSAIOT_SC_ACCEL_EV_FREEFALL,
-				     IIO_MOD_EVENT_CODE(IIO_ACCEL, 0,
-							IIO_MOD_X_AND_Y_AND_Z,
-							IIO_EV_TYPE_MAG,
-							IIO_EV_DIR_FALLING));
+	return ssaiot_sc_accel_event(data, IIO_MOD_EVENT_CODE(IIO_ACCEL, 0,
+							      IIO_MOD_X_AND_Y_AND_Z,
+							      IIO_EV_TYPE_MAG,
+							      IIO_EV_DIR_FALLING));
 }
 
 /*
- * The detectors run in the controller and cannot be turned off from here, so
- * these gate reporting rather than the hardware. The channel address says which
- * detector an attribute belongs to.
+ * Enabling an event unmasks its interrupt, which the demultiplexer forwards to
+ * the controller's own enable mask, so a disabled detector is not reported at
+ * all. The channel address says which detector an attribute belongs to.
  */
 static int ssaiot_sc_accel_read_event_config(struct iio_dev *indio_dev,
 					     const struct iio_chan_spec *chan,
@@ -281,7 +278,22 @@ static int ssaiot_sc_accel_write_event_config(struct iio_dev *indio_dev,
 {
 	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
 
-	assign_bit(chan->address, &motion->events, state);
+	/*
+	 * The irq depth is a refcount and sysfs does not filter repeated writes,
+	 * so the bit both records the state and claims the right to change it.
+	 * Nothing serialises two writers of the same attribute.
+	 */
+	if (state) {
+		if (test_and_set_bit(chan->address, &motion->events))
+			return 0;
+
+		enable_irq(motion->event_irq[chan->address]);
+	} else {
+		if (!test_and_clear_bit(chan->address, &motion->events))
+			return 0;
+
+		disable_irq(motion->event_irq[chan->address]);
+	}
 
 	return 0;
 }
@@ -360,18 +372,25 @@ static const unsigned long ssaiot_sc_accel_motion_scan_masks[] = {
 
 static int ssaiot_sc_accel_request_event(struct device *dev,
 					 struct iio_dev *indio_dev,
-					 const char *name,
-					 irq_handler_t handler)
+					 enum ssaiot_sc_accel_ev ev,
+					 const char *name, irq_handler_t handler)
 {
-	int irq;
+	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+	int irq, ret;
 
 	irq = platform_get_irq_byname(to_platform_device(dev), name);
 	if (irq < 0)
 		return irq;
 
-	/* nested and threaded, so the handler runs in the demux thread */
-	return devm_request_threaded_irq(dev, irq, NULL, handler, IRQF_ONESHOT,
-					 name, indio_dev);
+	ret = devm_request_threaded_irq(dev, irq, NULL, handler,
+					IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					name, indio_dev);
+	if (ret)
+		return ret;
+
+	motion->event_irq[ev] = irq;
+
+	return 0;
 }
 
 static int ssaiot_sc_accel_probe_motion(struct device *dev,
@@ -404,18 +423,18 @@ static int ssaiot_sc_accel_probe_motion(struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_request_event(dev, indio_dev, "motion",
-					    ssaiot_sc_accel_motion_event);
+	ret = ssaiot_sc_accel_request_event(dev, indio_dev, SSAIOT_SC_ACCEL_EV_MOTION,
+					    "motion", ssaiot_sc_accel_motion_event);
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_request_event(dev, indio_dev, "tilt",
-					    ssaiot_sc_accel_tilt_event);
+	ret = ssaiot_sc_accel_request_event(dev, indio_dev, SSAIOT_SC_ACCEL_EV_TILT,
+					    "tilt", ssaiot_sc_accel_tilt_event);
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_request_event(dev, indio_dev, "freefall",
-					    ssaiot_sc_accel_freefall_event);
+	ret = ssaiot_sc_accel_request_event(dev, indio_dev, SSAIOT_SC_ACCEL_EV_FREEFALL,
+					    "freefall", ssaiot_sc_accel_freefall_event);
 	if (ret)
 		return ret;
 
@@ -587,6 +606,13 @@ static int ssaiot_sc_accel_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, priv);
 	sc = dev_get_drvdata(dev->parent);
 
+	device_init_wakeup(dev, true);
+
+	ret = ssaiot_sc_irq_claim(sc, SSAIOT_SC_INT_SRC_ACC,
+				  device_may_wakeup(dev));
+	if (ret)
+		return ret;
+
 	ret = ssaiot_sc_accel_probe_motion(dev, sc, priv);
 	if (ret)
 		return dev_err_probe(dev, ret,
@@ -600,7 +626,7 @@ static int ssaiot_sc_accel_probe(struct platform_device *pdev)
 	return 0;
 }
 
-/* prepare for shutdown, i.e. release the bus and disable interrupts */
+/* prepare for shutdown, i.e. release the bus and apply the wake-up policy */
 static void ssaiot_sc_accel_shutdown(struct platform_device *pdev)
 {
 	struct ssaiot_sc_accel_priv *priv = platform_get_drvdata(pdev);
@@ -608,6 +634,10 @@ static void ssaiot_sc_accel_shutdown(struct platform_device *pdev)
 	/* stop work to release the bus */
 	cancel_delayed_work_sync(&priv->motion->work);
 	cancel_delayed_work_sync(&priv->thermal->work);
+
+	/* apply wake-up policy */
+	ssaiot_sc_irq_set_poweron(priv->motion->sc, SSAIOT_SC_INT_SRC_ACC,
+				  device_may_wakeup(&pdev->dev));
 }
 
 /*

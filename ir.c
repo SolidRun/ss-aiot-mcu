@@ -42,8 +42,11 @@ static_assert(sizeof(struct ssaiot_sc_ir_resp) <= SSAIOT_SC_RESP_MAX_DATA_LEN);
 #define SSAIOT_SC_IR_IDLE_MS 100
 
 /* detectors the controller reports, and the channel address each event uses */
-#define SSAIOT_SC_IR_EV_PRESENCE 0
-#define SSAIOT_SC_IR_EV_MOTION 1
+enum ssaiot_sc_ir_ev {
+	SSAIOT_SC_IR_EV_PRESENCE = 0,
+	SSAIOT_SC_IR_EV_MOTION,
+	SSAIOT_SC_IR_EV_MAX,
+};
 
 /*
  * Scan indices of the readings, and their positions in the scan below. The two
@@ -68,8 +71,9 @@ struct ssaiot_sc_ir_priv {
 		aligned_s64 timestamp;
 	} scan;
 
-	/* which detectors userspace asked to hear about */
+	/* which detectors userspace asked to hear about, and their interrupts */
 	unsigned long events;
+	int event_irq[SSAIOT_SC_IR_EV_MAX];
 };
 
 /* calculate record count from response size in bytes, after header */
@@ -212,40 +216,34 @@ static int ssaiot_sc_ir_read_label(struct iio_dev *indio_dev,
 	}
 }
 
-/* report one detector, if userspace is listening for it */
-static irqreturn_t ssaiot_sc_ir_event(struct iio_dev *indio_dev,
-				      unsigned int ev, u64 code)
+/* report one detector */
+static irqreturn_t ssaiot_sc_ir_event(struct iio_dev *indio_dev, u64 code)
 {
-	struct ssaiot_sc_ir_priv *priv = iio_priv(indio_dev);
-
-	if (test_bit(ev, &priv->events))
-		iio_push_event(indio_dev, code, iio_get_time_ns(indio_dev));
+	iio_push_event(indio_dev, code, iio_get_time_ns(indio_dev));
 
 	return IRQ_HANDLED;
 }
 
 static irqreturn_t ssaiot_sc_ir_presence_event(int irq, void *data)
 {
-	return ssaiot_sc_ir_event(data, SSAIOT_SC_IR_EV_PRESENCE,
-				  IIO_UNMOD_EVENT_CODE(IIO_PROXIMITY,
-						       SSAIOT_SC_IR_SCAN_PRESENCE,
-						       IIO_EV_TYPE_THRESH,
-						       IIO_EV_DIR_RISING));
+	return ssaiot_sc_ir_event(data, IIO_UNMOD_EVENT_CODE(IIO_PROXIMITY,
+							     SSAIOT_SC_IR_SCAN_PRESENCE,
+							     IIO_EV_TYPE_THRESH,
+							     IIO_EV_DIR_RISING));
 }
 
 static irqreturn_t ssaiot_sc_ir_activity_event(int irq, void *data)
 {
-	return ssaiot_sc_ir_event(data, SSAIOT_SC_IR_EV_MOTION,
-				  IIO_UNMOD_EVENT_CODE(IIO_PROXIMITY,
-						       SSAIOT_SC_IR_SCAN_MOTION,
-						       IIO_EV_TYPE_THRESH,
-						       IIO_EV_DIR_RISING));
+	return ssaiot_sc_ir_event(data, IIO_UNMOD_EVENT_CODE(IIO_PROXIMITY,
+							     SSAIOT_SC_IR_SCAN_MOTION,
+							     IIO_EV_TYPE_THRESH,
+							     IIO_EV_DIR_RISING));
 }
 
 /*
- * The detectors run in the controller and cannot be turned off from here, so
- * these gate reporting rather than the hardware. The channel address says which
- * detector an attribute belongs to.
+ * Enabling an event unmasks its interrupt, which the demultiplexer forwards to
+ * the controller's own enable mask, so a disabled detector is not reported at
+ * all. The channel address says which detector an attribute belongs to.
  */
 static int ssaiot_sc_ir_read_event_config(struct iio_dev *indio_dev,
 					  const struct iio_chan_spec *chan,
@@ -265,7 +263,22 @@ static int ssaiot_sc_ir_write_event_config(struct iio_dev *indio_dev,
 {
 	struct ssaiot_sc_ir_priv *priv = iio_priv(indio_dev);
 
-	assign_bit(chan->address, &priv->events, state);
+	/*
+	 * The irq depth is a refcount and sysfs does not filter repeated writes,
+	 * so the bit both records the state and claims the right to change it.
+	 * Nothing serialises two writers of the same attribute.
+	 */
+	if (state) {
+		if (test_and_set_bit(chan->address, &priv->events))
+			return 0;
+
+		enable_irq(priv->event_irq[chan->address]);
+	} else {
+		if (!test_and_clear_bit(chan->address, &priv->events))
+			return 0;
+
+		disable_irq(priv->event_irq[chan->address]);
+	}
 
 	return 0;
 }
@@ -335,18 +348,30 @@ static const unsigned long ssaiot_sc_ir_scan_masks[] = {
 
 static int ssaiot_sc_ir_request_event(struct device *dev,
 				      struct iio_dev *indio_dev,
-				      const char *name,
-				      irq_handler_t handler)
+				      enum ssaiot_sc_ir_ev ev,
+				      const char *name, irq_handler_t handler)
 {
-	int irq;
+	struct ssaiot_sc_ir_priv *priv = iio_priv(indio_dev);
+	int irq, ret;
 
 	irq = platform_get_irq_byname(to_platform_device(dev), name);
 	if (irq < 0)
 		return irq;
 
-	/* nested and threaded, so the handler runs in the demux thread */
-	return devm_request_threaded_irq(dev, irq, NULL, handler, IRQF_ONESHOT,
-					 name, indio_dev);
+	/*
+	 * Nested and threaded, so the handler runs in the demux thread. Left
+	 * masked because the unmask reaches the controller's own enable mask:
+	 * the event attribute is what turns the detector on.
+	 */
+	ret = devm_request_threaded_irq(dev, irq, NULL, handler,
+					IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					name, indio_dev);
+	if (ret)
+		return ret;
+
+	priv->event_irq[ev] = irq;
+
+	return 0;
 }
 
 static int ssaiot_sc_ir_probe(struct platform_device *pdev)
@@ -381,26 +406,37 @@ static int ssaiot_sc_ir_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_ir_request_event(dev, indio_dev, "presence",
-					 ssaiot_sc_ir_presence_event);
+	device_init_wakeup(dev, true);
+
+	ret = ssaiot_sc_irq_claim(priv->sc, SSAIOT_SC_INT_SRC_IR,
+				  device_may_wakeup(dev));
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_ir_request_event(dev, indio_dev, "activity",
-					 ssaiot_sc_ir_activity_event);
+	ret = ssaiot_sc_ir_request_event(dev, indio_dev, SSAIOT_SC_IR_EV_PRESENCE,
+					 "presence", ssaiot_sc_ir_presence_event);
+	if (ret)
+		return ret;
+
+	ret = ssaiot_sc_ir_request_event(dev, indio_dev, SSAIOT_SC_IR_EV_MOTION,
+					 "activity", ssaiot_sc_ir_activity_event);
 	if (ret)
 		return ret;
 
 	return devm_iio_device_register(dev, indio_dev);
 }
 
-/* prepare for shutdown, i.e. release the bus and disable interrupts */
+/* prepare for shutdown, i.e. release the bus and apply the wake-up policy */
 static void ssaiot_sc_ir_shutdown(struct platform_device *pdev)
 {
 	struct ssaiot_sc_ir_priv *priv = platform_get_drvdata(pdev);
 
 	/* stop work to release the bus */
 	cancel_delayed_work_sync(&priv->work);
+
+	/* apply wake-up policy */
+	ssaiot_sc_irq_set_poweron(priv->sc, SSAIOT_SC_INT_SRC_IR,
+				  device_may_wakeup(&pdev->dev));
 }
 
 /*

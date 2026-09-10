@@ -241,15 +241,31 @@ static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 	if (rtc->irq < 0)
 		return rtc->irq;
 
+	device_init_wakeup(dev, true);
+
+	/* take the source over before the request below unmasks the alarm */
+	ret = ssaiot_sc_irq_claim(rtc->sc, SSAIOT_SC_INT_SRC_RTC,
+				  device_may_wakeup(dev));
+	if (ret)
+		return ret;
+
 	/* request threaded irq to allow long i2c transfers while processing */
 	ret = devm_request_threaded_irq(dev, rtc->irq, NULL, ssaiot_sc_rtc_irq,
 					IRQF_ONESHOT, dev_name(dev), rtc);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to request alarm irq.\n");
 
-	device_init_wakeup(dev, true);
-
 	return devm_rtc_register_device(rtc->rtc);
+}
+
+/* prepare for shutdown, i.e. release the bus, disable interrupts, apply wakeup policy */
+static void ssaiot_sc_rtc_shutdown(struct platform_device *pdev)
+{
+	struct ssaiot_sc_rtc *rtc = platform_get_drvdata(pdev);
+
+	/* apply wake-up policy */
+	ssaiot_sc_irq_set_poweron(rtc->sc, SSAIOT_SC_INT_SRC_RTC,
+				  device_may_wakeup(&pdev->dev));
 }
 
 static int ssaiot_sc_rtc_suspend(struct device *dev)
@@ -296,6 +312,7 @@ static struct platform_driver ssaiot_sc_rtc_driver = {
 		.pm = pm_sleep_ptr(&ssaiot_sc_rtc_pm_ops),
 	},
 	.probe = ssaiot_sc_rtc_probe,
+	.shutdown = ssaiot_sc_rtc_shutdown,
 	.id_table = ssaiot_sc_rtc_id_table,
 };
 module_platform_driver(ssaiot_sc_rtc_driver);

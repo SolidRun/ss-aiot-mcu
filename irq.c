@@ -9,58 +9,125 @@
 #include <linux/device.h>
 #include <linux/interrupt.h>
 #include <linux/irqdomain.h>
+#include <linux/string.h>
 
 #include "ssaiot_sc.h"
 
 /*
  * Payload of CMD_SENSOR_READ / SENSOR_INTERRUPTS: a bitfield of the sources
- * that fired, followed by one detail byte for each source that has one.
+ * that fired, then one detail byte per source, indexed by the source itself -
+ * the same shape the configuration payload uses for its enable masks.
  *
  * Every byte is an accumulated latch that the read clears, so this is the only
  * place the interrupt state may be sampled - a sub-device reading it for itself
  * would consume events belonging to the others. It answers "what fired since
  * the last read", never "what is true now".
  */
-#define SSAIOT_SC_INT_SOURCES		0
-#define SSAIOT_SC_INT_IR		1
-#define SSAIOT_SC_INT_ACC		2
-#define SSAIOT_SC_INT_RTC		3
-#define SSAIOT_SC_INT_LEN		4
+struct ssaiot_sc_irq_status {
+	u8 sources;
+	u8 detail[SSAIOT_SC_INT_SRC_MAX];
+} __packed;
 
-/* data[0], which sources fired */
-#define SSAIOT_SC_INT_SRC_MCU		BIT(0)
-#define SSAIOT_SC_INT_SRC_IR		BIT(1)
-#define SSAIOT_SC_INT_SRC_ACC		BIT(2)
-#define SSAIOT_SC_INT_SRC_RTC		BIT(3)
-#define SSAIOT_SC_INT_SRC_CHARGER	BIT(4)	/* allocated, never set yet */
+/* mcu detail */
+#define SSAIOT_SC_MCU_RESTART		BIT(0)
 
-/* data[1], IR detail */
+/* ir detail */
 #define SSAIOT_SC_IR_MOTION		BIT(0)
 #define SSAIOT_SC_IR_PRESENCE		BIT(1)
 
-/* data[2], accelerometer detail */
+/* accelerometer detail */
 #define SSAIOT_SC_ACCEL_MOTION		BIT(0)
 #define SSAIOT_SC_ACCEL_TILT		BIT(1)
 #define SSAIOT_SC_ACCEL_FREEFALL	BIT(2)
 
-/* data[3] */
+/* rtc detail */
 #define SSAIOT_SC_RTC_ALARM_A		BIT(0)
 
-/*
- * Demultiplexing table: which payload byte and which bit raises each IRQ. A
- * source with no detail byte is dispatched from its own bit in data[0].
- */
+/* Demultiplexing table: which source and which of its detail bits raises each IRQ. */
 static const struct {
-	u8 offset;
+	enum ssaiot_sc_int_src src;
 	u8 mask;
 } ssaiot_sc_irq_source[SSAIOT_SC_NUM_IRQS] = {
-	[SSAIOT_SC_IRQ_IR_ACTIVITY]    = { SSAIOT_SC_INT_IR,  SSAIOT_SC_IR_MOTION },
-	[SSAIOT_SC_IRQ_IR_PRESENCE]    = { SSAIOT_SC_INT_IR,  SSAIOT_SC_IR_PRESENCE },
-	[SSAIOT_SC_IRQ_ACCEL_MOTION]   = { SSAIOT_SC_INT_ACC, SSAIOT_SC_ACCEL_MOTION },
-	[SSAIOT_SC_IRQ_ACCEL_TILT]     = { SSAIOT_SC_INT_ACC, SSAIOT_SC_ACCEL_TILT },
-	[SSAIOT_SC_IRQ_ACCEL_FREEFALL] = { SSAIOT_SC_INT_ACC, SSAIOT_SC_ACCEL_FREEFALL },
-	[SSAIOT_SC_IRQ_RTC_ALARM]      = { SSAIOT_SC_INT_RTC, SSAIOT_SC_RTC_ALARM_A },
+	[SSAIOT_SC_IRQ_MCU_RESTART]    = { SSAIOT_SC_INT_SRC_MCU, SSAIOT_SC_MCU_RESTART },
+	[SSAIOT_SC_IRQ_IR_ACTIVITY]    = { SSAIOT_SC_INT_SRC_IR,  SSAIOT_SC_IR_MOTION },
+	[SSAIOT_SC_IRQ_IR_PRESENCE]    = { SSAIOT_SC_INT_SRC_IR,  SSAIOT_SC_IR_PRESENCE },
+	[SSAIOT_SC_IRQ_ACCEL_MOTION]   = { SSAIOT_SC_INT_SRC_ACC, SSAIOT_SC_ACCEL_MOTION },
+	[SSAIOT_SC_IRQ_ACCEL_TILT]     = { SSAIOT_SC_INT_SRC_ACC, SSAIOT_SC_ACCEL_TILT },
+	[SSAIOT_SC_IRQ_ACCEL_FREEFALL] = { SSAIOT_SC_INT_SRC_ACC, SSAIOT_SC_ACCEL_FREEFALL },
+	[SSAIOT_SC_IRQ_RTC_ALARM]      = { SSAIOT_SC_INT_SRC_RTC, SSAIOT_SC_RTC_ALARM_A },
 };
+
+/* sync shadow state with controller */
+static int ssaiot_sc_irq_sync(struct ssaiot_sc_priv *priv)
+{
+	struct ssaiot_sc_irq_config resp;
+	int ret;
+
+	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_CONFIG,
+			     SSAIOT_SC_SENSOR_INTERRUPTS,
+			     (const u8 *)&priv->irq_config,
+			     sizeof(priv->irq_config),
+			     (u8 *)&resp, sizeof(resp), NULL, NULL, NULL);
+	if (ret) {
+		dev_err_ratelimited(priv->dev,
+				    "failed to write interrupt config: %d.\n",
+				    ret);
+		return ret;
+	}
+
+	if (memcmp(&resp, &priv->irq_config, sizeof(resp)))
+		dev_warn(priv->dev,
+			 "interrupt config not applied: wrote %*ph, got %*ph.\n",
+			 (int)sizeof(priv->irq_config), &priv->irq_config,
+			 (int)sizeof(resp), &resp);
+
+	priv->irq_config_dirty = false;
+
+	return 0;
+}
+
+static void ssaiot_sc_irq_set_enable(struct irq_data *d, bool on)
+{
+	struct ssaiot_sc_priv *priv = irq_data_get_irq_chip_data(d);
+	irq_hw_number_t hwirq = irqd_to_hwirq(d);
+	enum ssaiot_sc_int_src src = ssaiot_sc_irq_source[hwirq].src;
+	u8 *detail = &priv->irq_config.en_detail[src];
+	u8 before = *detail;
+
+	if (on)
+		*detail |= ssaiot_sc_irq_source[hwirq].mask;
+	else
+		*detail &= ~ssaiot_sc_irq_source[hwirq].mask;
+
+	priv->irq_config_dirty |= *detail != before;
+}
+
+static void ssaiot_sc_irq_mask(struct irq_data *d)
+{
+	ssaiot_sc_irq_set_enable(d, false);
+}
+
+static void ssaiot_sc_irq_unmask(struct irq_data *d)
+{
+	ssaiot_sc_irq_set_enable(d, true);
+}
+
+static void ssaiot_sc_irq_bus_lock(struct irq_data *d)
+{
+	struct ssaiot_sc_priv *priv = irq_data_get_irq_chip_data(d);
+
+	mutex_lock(&priv->irq_lock);
+}
+
+static void ssaiot_sc_irq_bus_sync_unlock(struct irq_data *d)
+{
+	struct ssaiot_sc_priv *priv = irq_data_get_irq_chip_data(d);
+
+	if (priv->irq_config_dirty)
+		ssaiot_sc_irq_sync(priv);
+
+	mutex_unlock(&priv->irq_lock);
+}
 
 /* forward set_wake to the parent */
 static int ssaiot_sc_irq_set_wake(struct irq_data *d, unsigned int on)
@@ -71,19 +138,98 @@ static int ssaiot_sc_irq_set_wake(struct irq_data *d, unsigned int on)
 }
 
 /*
- * The controller has no interrupt mask registers - a source is either reported
- * by the interrupt read or it is not - so the chip implements no mask
- * callbacks. mask_irq() and unmask_irq() skip an absent handler, and
- * disable_irq() still takes effect because it sets IRQD_IRQ_DISABLED itself,
- * which is what handle_nested_irq() tests before running the action.
+ * mask and unmask only edit the shadow, because the core runs them under the
+ * descriptor's raw spinlock where the bus may not be used. It brackets them
+ * with bus_lock and bus_sync_unlock, which run outside that lock, so the one
+ * transfer happens there however many bits changed.
  *
- * Wake-up is the one thing the chip has to act on, since the hardware that
- * carries it belongs to the parent rather than to any single source.
+ * disable has to be given too. Without it disable_irq() is lazy: it records
+ * IRQD_IRQ_DISABLED and leaves the masking to the flow handler, and
+ * handle_nested_irq() only marks such an interrupt pending. The controller
+ * would go on reporting a detector userspace had switched off.
+ *
+ * Wake-up is a different thing and stays separate: it keeps the parent's line
+ * alive across suspend and tells the controller nothing, whose power-on mask
+ * matters only once the SoM has no power at all.
  */
 static struct irq_chip ssaiot_sc_irq_chip = {
 	.name = "ssaiot-sc",
+	.irq_mask = ssaiot_sc_irq_mask,
+	.irq_disable = ssaiot_sc_irq_mask,
+	.irq_unmask = ssaiot_sc_irq_unmask,
+	.irq_bus_lock = ssaiot_sc_irq_bus_lock,
+	.irq_bus_sync_unlock = ssaiot_sc_irq_bus_sync_unlock,
 	.irq_set_wake = ssaiot_sc_irq_set_wake,
 };
+
+/**
+ * ssaiot_sc_irq_claim() - Take a source over from whatever the controller had
+ * @priv: Driver private structure
+ * @src: Source the caller owns
+ * @poweron: Whether that source may power the SoM on
+ *
+ * A sub-device calls this once, before requesting any of its interrupts. Until
+ * then the source keeps the state the controller booted with, so one whose
+ * driver never binds goes on working as the controller left it - an armed
+ * alarm still restores power to a SoM that has none, which no driver could
+ * arrange after the fact.
+ *
+ * Every detail bit is cleared, since the interrupts start masked and are
+ * unmasked one at a time as userspace asks for them.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+int ssaiot_sc_irq_claim(struct ssaiot_sc_priv *priv,
+			enum ssaiot_sc_int_src src, bool poweron)
+{
+	int ret;
+
+	mutex_lock(&priv->irq_lock);
+
+	priv->irq_config.en_detail[src] = 0;
+
+	if (poweron)
+		priv->irq_config.pwr_sources |= BIT(src);
+	else
+		priv->irq_config.pwr_sources &= ~BIT(src);
+
+	ret = ssaiot_sc_irq_sync(priv);
+	mutex_unlock(&priv->irq_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ssaiot_sc_irq_claim);
+
+/**
+ * ssaiot_sc_irq_set_poweron() - Let a source restore SoM power
+ * @priv: Driver private structure
+ * @src: Source to allow or deny
+ * @on: Whether that source may power the SoM on
+ *
+ * The controller consults this only while the SoM is off, so a sub-device sets
+ * it on the way down rather than keeping it current - nothing reports a write
+ * to power/wakeup while running. Granularity is the source rather than the
+ * individual interrupt, which is all that attribute can express anyway, since
+ * every cell owns exactly one source.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+int ssaiot_sc_irq_set_poweron(struct ssaiot_sc_priv *priv,
+			      enum ssaiot_sc_int_src src, bool on)
+{
+	int ret;
+
+	mutex_lock(&priv->irq_lock);
+	if (on)
+		priv->irq_config.pwr_sources |= BIT(src);
+	else
+		priv->irq_config.pwr_sources &= ~BIT(src);
+	ret = ssaiot_sc_irq_sync(priv);
+	mutex_unlock(&priv->irq_lock);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(ssaiot_sc_irq_set_poweron);
 
 static int ssaiot_sc_irq_map(struct irq_domain *d, unsigned int virq,
 			     irq_hw_number_t hwirq)
@@ -126,8 +272,7 @@ static const struct irq_domain_ops ssaiot_sc_irq_domain_ops = {
 static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 {
 	struct ssaiot_sc_priv *priv = data;
-	u8 status;
-	u8 flags[SSAIOT_SC_INT_LEN];
+	struct ssaiot_sc_irq_status status;
 	unsigned int i, virq;
 	int ret;
 
@@ -139,7 +284,7 @@ static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 	 */
 	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_READ,
 			     SSAIOT_SC_SENSOR_INTERRUPTS, NULL, 0,
-			     flags, sizeof(flags), NULL, &status, NULL);
+			     (u8 *)&status, sizeof(status), NULL, NULL, NULL);
 	if (ret) {
 		/* delay next attempt in case of bus errors */
 		msleep(10);
@@ -147,16 +292,11 @@ static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 	}
 
 	/* somebody else pulled the line down, leave it to them */
-	if (!flags[SSAIOT_SC_INT_SOURCES])
+	if (!status.sources)
 		return IRQ_NONE;
 
-	/* mcu source means system controller restarted */
-	if (flags[SSAIOT_SC_INT_SOURCES] & SSAIOT_SC_INT_SRC_MCU)
-		dev_warn(priv->dev,
-			 "controller restarted, sensor configuration was lost.\n");
-
 	for (i = 0; i < SSAIOT_SC_NUM_IRQS; i++) {
-		if (!(flags[ssaiot_sc_irq_source[i].offset] &
+		if (!(status.detail[ssaiot_sc_irq_source[i].src] &
 		      ssaiot_sc_irq_source[i].mask))
 			continue;
 
@@ -170,6 +310,35 @@ static irqreturn_t ssaiot_sc_irq_thread(int irq, void *data)
 	 * interrupt is handled even if no individual source claimed it - a
 	 * racing sensor read can consume the flag before we get to it.
 	 */
+	return IRQ_HANDLED;
+}
+
+/**
+ * ssaiot_sc_irq_restart() - Answer the controller having restarted
+ * @irq: Restart interrupt number
+ * @data: Driver private structure
+ *
+ * The configuration went with it, back to reporting everything. Nothing
+ * reaches userspace, since a masked source still has its virq disabled, but
+ * the controller asserts and is read for events nobody wants.
+ */
+static irqreturn_t ssaiot_sc_irq_restart(int irq, void *data)
+{
+	struct ssaiot_sc_priv *priv = data;
+
+	dev_warn(priv->dev,
+		 "controller restarted, its configuration is back at defaults.\n");
+
+	/*
+	 * Marked dirty first, so a write that fails here is retried by whatever
+	 * changes a mask next - the restart is announced once and does not come
+	 * round again.
+	 */
+	mutex_lock(&priv->irq_lock);
+	priv->irq_config_dirty = true;
+	ssaiot_sc_irq_sync(priv);
+	mutex_unlock(&priv->irq_lock);
+
 	return IRQ_HANDLED;
 }
 
@@ -194,6 +363,7 @@ static void ssaiot_sc_irq_domain_release(void *data)
 int ssaiot_sc_irq_probe(struct device *dev)
 {
 	struct ssaiot_sc_priv *priv = dev_get_drvdata(dev);
+	unsigned int virq;
 	int ret;
 
 	priv->irq_domain = irq_domain_add_linear(NULL, SSAIOT_SC_NUM_IRQS,
@@ -208,11 +378,46 @@ int ssaiot_sc_irq_probe(struct device *dev)
 	if (ret)
 		return ret;
 
+	mutex_init(&priv->irq_lock);
+
 	/*
-	 * The mappings themselves are created by mfd_add_devices(), which calls
-	 * irq_create_mapping() for every IRQ resource its cells declare and
-	 * stores the result in the resource. Nothing needs to be mapped here.
+	 * Seed shadow state from the active controller configuration rather
+	 * than narrow it here. Each source is taken over by its own driver as
+	 * that probes; one no driver claims keeps the state it booted with.
 	 */
+	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_CONFIG,
+			     SSAIOT_SC_SENSOR_INTERRUPTS, NULL, 0,
+			     (u8 *)&priv->irq_config, sizeof(priv->irq_config),
+			     NULL, NULL, NULL);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to read interrupt config.\n");
+
+	/*
+	 * The core is the driver for the controller's own source, so it takes
+	 * it over the way a sub-device does. A restart does not power the SoM
+	 * on, which is a no-op: the restart clears that configuration anyway.
+	 */
+	ret = ssaiot_sc_irq_claim(priv, SSAIOT_SC_INT_SRC_MCU, false);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to claim mcu source.\n");
+
+	/*
+	 * The sub-device mappings are created by mfd_add_devices(), which calls
+	 * irq_create_mapping() for every IRQ resource its cells declare and
+	 * stores the result in the resource. Only the core's own virq is mapped
+	 * here.
+	 */
+	virq = irq_create_mapping(priv->irq_domain, SSAIOT_SC_IRQ_MCU_RESTART);
+	if (!virq)
+		return dev_err_probe(dev, -ENOMEM,
+				     "Failed to map restart irq.\n");
+
+	ret = devm_request_threaded_irq(dev, virq, NULL, ssaiot_sc_irq_restart,
+					IRQF_ONESHOT, dev_name(dev), priv);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to request restart irq.\n");
+
 	ret = devm_request_threaded_irq(dev, priv->irq, NULL,
 					ssaiot_sc_irq_thread, IRQF_ONESHOT,
 					dev_name(dev), priv);
@@ -220,4 +425,13 @@ int ssaiot_sc_irq_probe(struct device *dev)
 		return dev_err_probe(dev, ret, "Failed to request irq.\n");
 
 	return 0;
+}
+
+/* prepare for shutdown, i.e. disable interrupts */
+void ssaiot_sc_irq_shutdown(struct ssaiot_sc_priv *priv)
+{
+	unsigned int virq = irq_find_mapping(priv->irq_domain, SSAIOT_SC_IRQ_MCU_RESTART);
+
+	if (virq)
+		disable_irq(virq);
 }
