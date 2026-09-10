@@ -111,6 +111,60 @@ void SomScheduleOff(uint16_t delay_ms) {
 }
 
 
+/* Interrupt reporting configuration, in the wire order of 0x13 0x07.
+ *
+ * en_sources gates whole sources and pwr_sources selects which of the sources
+ * that got through power the SOM up, so the two source masks sit together;
+ * en_ir/en_acc/en_rtc gate the individual events within a source, in the order
+ * of the detail bytes of the interrupt status read.
+ *
+ * The defaults report everything and reproduce the power behaviour the
+ * firmware had before the command existed: a sensor or alarm event brings the
+ * SOM up, the firmware's own restart notification does not.
+ */
+static volatile struct {
+	uint8_t en_sources;
+	uint8_t pwr_sources;
+	uint8_t en_ir;
+	uint8_t en_acc;
+	uint8_t en_rtc;
+} int_cfg = {
+	0xFFU,
+	INT_SRC_IR | INT_SRC_ACCEL | INT_SRC_RTC,
+	0xFFU, 0xFFU, 0xFFU,
+};
+
+/* Report the interrupt configuration, INT_CONFIG_LEN bytes in wire order.
+ */
+void somGetIntConfig(uint8_t *out)
+{
+	out[0] = int_cfg.en_sources;
+	out[1] = int_cfg.pwr_sources;
+	out[2] = int_cfg.en_ir;
+	out[3] = int_cfg.en_acc;
+	out[4] = int_cfg.en_rtc;
+}
+
+/* Replace the interrupt configuration, INT_CONFIG_LEN bytes in wire order.
+ *
+ * Applied as one indivisible operation, so an event in flight is judged
+ * against either the old configuration or the new one, never a mix.
+ */
+void somSetIntConfig(const uint8_t *in)
+{
+	uint32_t primask = __get_PRIMASK();
+
+	__disable_irq();
+
+	int_cfg.en_sources  = in[0];
+	int_cfg.pwr_sources = in[1];
+	int_cfg.en_ir       = in[2];
+	int_cfg.en_acc      = in[3];
+	int_cfg.en_rtc      = in[4];
+
+	__set_PRIMASK(primask);
+}
+
 /* Record an interrupt source together with its detail bits, and assert the
  * line to the SOM. The source bit and its detail byte are set as one
  * indivisible operation, so a read of the interrupt status never sees one
@@ -124,9 +178,25 @@ void somSetInt(uint8_t source, uint8_t detail)
 {
 	uint32_t primask;
 
+	/* keep only the events this source is configured to report */
+	switch (source) {
+	case INT_SRC_IR:    detail &= int_cfg.en_ir;  break;
+	case INT_SRC_ACCEL: detail &= int_cfg.en_acc; break;
+	case INT_SRC_RTC:   detail &= int_cfg.en_rtc; break;
+	default: break;      /* INT_SRC_MCU has no events to select from */
+	}
+
 	/* nothing to report */
 	if (detail == 0)
 		return;
+
+	/* the source itself may be switched off */
+	if ((source & int_cfg.en_sources) == 0U)
+		return;
+
+	/* the SOM has to be powered to receive what it asked to be woken for */
+	if ((source & int_cfg.pwr_sources) != 0U)
+		SomEnable();
 
 	primask = __get_PRIMASK();
 

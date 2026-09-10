@@ -241,6 +241,8 @@ Multi-byte values are little-endian unless stated otherwise.
 | Read current time              | {0x12,0x06,0x00,{}}     | {0x00,6,{YY,MM,DD,HH,MM,SS}}              |
 | Sync RTC from GPS              | {0x13,0x06,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,4,{SOURCES, IR, ACC, RTC}}            |
+| Read interrupt config          | {0x13,0x07,0x00,{}}     | {0x00,5,{EN_SOURCES, PWR_SOURCES, EN_IR, EN_ACC, EN_RTC}} |
+| Set interrupt config           | {0x13,0x07,0x05,{EN_SOURCES, PWR_SOURCES, EN_IR, EN_ACC, EN_RTC}} | {0x00,5,{EN_SOURCES, PWR_SOURCES, EN_IR, EN_ACC, EN_RTC}} |
 | Set daily alarm                | {0x13,0x08,0x03,{HH,MM,SS}} | {0x00,0x00,{}}                         |
 | Cancel alarm                   | {0x11,0x08,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,3,{HH,MM,SS}}                        |
@@ -375,6 +377,28 @@ Notes on individual commands:
   [What the interrupt status register contains](#what-the-interrupt-status-register-contains).
   It is the only command that clears interrupt state, and the only one that releases
   the `MCU_INT` line.
+- **Interrupt config** is one command for both directions. An empty payload
+  reads the configuration, a five-byte payload replaces it. The response carries
+  the configuration in effect after the command:
+
+  | Byte | Field | Meaning |
+  |------|-------|---------|
+  | 0 | `EN_SOURCES` | which sources may be reported at all, same bits as `SOURCES` |
+  | 1 | `PWR_SOURCES` | which of the reported sources also power the SOM on, same bits as `SOURCES` |
+  | 2 | `EN_IR` | which IR events may be reported, same bits as the IR detail byte |
+  | 3 | `EN_ACC` | which accelerometer events may be reported, same bits as the ACC detail byte |
+  | 4 | `EN_RTC` | which RTC events may be reported, same bits as the RTC detail byte |
+
+  An event is reported when it passes its detail mask and its source bit in
+  `EN_SOURCES`. One that does not is neither latched nor reported. `PWR_SOURCES`
+  applies to events that passed both masks.
+
+  Defaults after reset are `0xFF, 0x0E, 0xFF, 0xFF, 0xFF`: every event reported,
+  and IR, accelerometer and RTC alarm power the SOM up.
+
+  `STATUS = 0x01` means the payload was neither empty nor five bytes; the
+  configuration is unchanged and `DATA_LEN` is `0`. The configuration lives in
+  RAM and does not survive an MCU reset.
 - **Read GPS data** returns **raw NMEA bytes**, not a parsed position. It is a
   passthrough: the MCU does not decode coordinates at all. The payload is **always
   32 bytes** — packed with as many queued sentences as fit and padded with newlines
@@ -426,6 +450,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x05` (battery) | 9 | five I2C1 register reads |
 | `0x12,0x06` (time) | 8 | immediate |
 | `0x12,0x07` (interrupt status) | 6 | immediate — snapshots RAM latches, no bus access |
+| `0x13,0x07` (interrupt config) | 7 | immediate |
 | `0x12,0x08` (armed alarm) | 5 | immediate |
 | `0x11,0x08` (cancel alarm) | 2 | immediate |
 | `0x11,0x09` (power-off som) | 2 | response immediate, power-off after 1s |

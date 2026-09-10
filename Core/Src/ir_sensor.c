@@ -334,12 +334,6 @@ void IR_ProcessInt(uint8_t *detail)
 		return;
 	}
 
-	if (events == 0)
-		return;
-
-	/* the SOM has to be powered to receive the notification */
-	SomEnable();
-
 	*detail = (uint8_t)events;
 }
 

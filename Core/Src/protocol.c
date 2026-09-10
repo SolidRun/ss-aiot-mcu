@@ -225,6 +225,33 @@ void INT_Read(uint8_t *data, uint8_t *len) {
     somTakeInterrupts(&data[0], &data[1], &data[2], &data[3]);
 }
 
+/* 0x13 0x07 - read or replace the interrupt configuration.
+ *
+ * An empty payload reads it; a full one replaces it first. Either way the
+ * response carries the configuration now in effect, so a master sees what took
+ * hold rather than what it asked for.
+ *
+ * Bits set in PWR_SOURCES for a source that EN_SOURCES switches off have no
+ * effect; the source is not reported at all.
+ */
+void INT_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *data, uint8_t *len,
+                uint8_t *status) {
+    if ((cmd_len != 0U) && (cmd_len != INT_CONFIG_LEN)) {
+        /* neither a read nor a whole configuration, change nothing */
+        *status = 1;
+        *len = 0;
+        return;
+    }
+
+    if (cmd_len == INT_CONFIG_LEN) {
+        somSetIntConfig(cmd_data);
+    }
+
+    somGetIntConfig(data);
+    *len = INT_CONFIG_LEN;
+    *status = 0;
+}
+
 /* Protocol command processor
  */
 void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
@@ -300,6 +327,10 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         			break;
         		case SENSOR_ALARM:
         			Sensor_Alarm_Config(cmd->data, cmd->data_len, &resp->status);
+        			break;
+        		case INTERRUPTS:
+        			INT_Config(cmd->data, cmd->data_len, resp->data,
+        			           &resp->data_len, &resp->status);
         			break;
                 default:
                     resp->status = 1; // Unknown sensor

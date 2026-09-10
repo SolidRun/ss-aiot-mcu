@@ -343,7 +343,6 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *handle)
 {
   (void)handle;
 
-  SomEnable();
   somSetInt(INT_SRC_RTC, 0x01U);   /* alarm A */
 }
 /* USER CODE END 1 */
