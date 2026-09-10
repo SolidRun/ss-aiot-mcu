@@ -67,41 +67,36 @@ enum ssaiot_sc_accel_ev {
 #define SSAIOT_SC_ACCEL_Y 1
 #define SSAIOT_SC_ACCEL_Z 2
 
-/* motion channel */
-struct ssaiot_sc_accel_motion {
+/* driver private data, shared by both iio devices */
+struct ssaiot_sc_accel_priv {
 	struct ssaiot_sc_priv *sc;
-	struct iio_dev *indio_dev;
-	struct delayed_work work;
 
-	/* one scan includes 3 axis + timestamp */
+	/* the motion stream, one scan includes 3 axis + timestamp */
+	struct iio_dev *motion_iio;
+	struct delayed_work motion_work;
 	struct {
 		s16 axis[3];
 		aligned_s64 timestamp;
-	} scan;
+	} motion_scan;
+
+	/* the temperature stream, one scan includes temperature + timestamp */
+	struct iio_dev *temp_iio;
+	struct delayed_work temp_work;
+	struct {
+		s16 temp;
+		aligned_s64 timestamp;
+	} temp_scan;
 
 	/* which detectors userspace asked to hear about, and their interrupts */
 	unsigned long events;
 	int event_irq[SSAIOT_SC_ACCEL_EV_MAX];
 };
 
-/* temperature channel */
-struct ssaiot_sc_accel_thermal {
-	struct ssaiot_sc_priv *sc;
-	struct iio_dev *indio_dev;
-	struct delayed_work work;
-
-	/* one scan includes temperature + timestamp */
-	struct {
-		s16 temp;
-		aligned_s64 timestamp;
-	} scan;
-};
-
-/* driver private data, both streams so shutdown can reach their work */
-struct ssaiot_sc_accel_priv {
-	struct ssaiot_sc_accel_motion *motion;
-	struct ssaiot_sc_accel_thermal *thermal;
-};
+/* each iio device keeps a pointer to it in the private area iio allocates */
+static struct ssaiot_sc_accel_priv *ssaiot_sc_accel_iio_priv(struct iio_dev *indio_dev)
+{
+	return *(struct ssaiot_sc_accel_priv **)iio_priv(indio_dev);
+}
 
 /* calculate record count from response size in bytes, after header */
 static inline int ssaiot_sc_accel_records(u8 len, size_t hdr_len, size_t rec_size)
@@ -131,16 +126,16 @@ static s64 ssaiot_sc_accel_timestamp(s64 ts_ref, __le32 now, __le32 stamp)
  */
 static void ssaiot_sc_accel_motion_poll(struct work_struct *work)
 {
-	struct ssaiot_sc_accel_motion *motion =
+	struct ssaiot_sc_accel_priv *priv =
 		container_of(to_delayed_work(work),
-			     struct ssaiot_sc_accel_motion, work);
+			     struct ssaiot_sc_accel_priv, motion_work);
 	unsigned int delay_ms = SSAIOT_SC_ACCEL_MOTION_IDLE_MS;
 	struct ssaiot_sc_accel_motion_resp resp;
 	s64 ts_ref;
 	u8 len;
 	int n, i;
 
-	n = ssaiot_sc_xfer(motion->sc, SSAIOT_SC_CMD_SENSOR_READ,
+	n = ssaiot_sc_xfer(priv->sc, SSAIOT_SC_CMD_SENSOR_READ,
 			   SSAIOT_SC_SENSOR_ACCEL_MOTION, NULL, 0,
 			   (u8 *)&resp, sizeof(resp), &len, NULL, &ts_ref);
 	if (!n)
@@ -148,19 +143,19 @@ static void ssaiot_sc_accel_motion_poll(struct work_struct *work)
 					    sizeof(resp.sample[0]));
 
 	if (n < 0) {
-		dev_warn_ratelimited(motion->sc->dev,
+		dev_warn_ratelimited(priv->sc->dev,
 				     "motion read failed: %d.\n", n);
 	} else {
 		for (i = 0; i < n; i++) {
-			motion->scan.axis[SSAIOT_SC_ACCEL_X] =
+			priv->motion_scan.axis[SSAIOT_SC_ACCEL_X] =
 				(s16)le16_to_cpu(resp.sample[i].x);
-			motion->scan.axis[SSAIOT_SC_ACCEL_Y] =
+			priv->motion_scan.axis[SSAIOT_SC_ACCEL_Y] =
 				(s16)le16_to_cpu(resp.sample[i].y);
-			motion->scan.axis[SSAIOT_SC_ACCEL_Z] =
+			priv->motion_scan.axis[SSAIOT_SC_ACCEL_Z] =
 				(s16)le16_to_cpu(resp.sample[i].z);
 
-			iio_push_to_buffers_with_timestamp(motion->indio_dev,
-					&motion->scan,
+			iio_push_to_buffers_with_timestamp(priv->motion_iio,
+					&priv->motion_scan,
 					ssaiot_sc_accel_timestamp(ts_ref, resp.now,
 							resp.sample[i].timestamp));
 		}
@@ -170,25 +165,25 @@ static void ssaiot_sc_accel_motion_poll(struct work_struct *work)
 			delay_ms = 0;
 	}
 
-	queue_delayed_work(motion->sc->wq, &motion->work,
+	queue_delayed_work(priv->sc->wq, &priv->motion_work,
 			   msecs_to_jiffies(delay_ms));
 }
 
 static int ssaiot_sc_accel_motion_postenable(struct iio_dev *indio_dev)
 {
-	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+	struct ssaiot_sc_accel_priv *priv = ssaiot_sc_accel_iio_priv(indio_dev);
 
-	queue_delayed_work(motion->sc->wq, &motion->work, 0);
+	queue_delayed_work(priv->sc->wq, &priv->motion_work, 0);
 
 	return 0;
 }
 
 static int ssaiot_sc_accel_motion_predisable(struct iio_dev *indio_dev)
 {
-	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+	struct ssaiot_sc_accel_priv *priv = ssaiot_sc_accel_iio_priv(indio_dev);
 
 	/* safe against the work re-queueing itself */
-	cancel_delayed_work_sync(&motion->work);
+	cancel_delayed_work_sync(&priv->motion_work);
 
 	return 0;
 }
@@ -265,9 +260,9 @@ static int ssaiot_sc_accel_read_event_config(struct iio_dev *indio_dev,
 					     enum iio_event_type type,
 					     enum iio_event_direction dir)
 {
-	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+	struct ssaiot_sc_accel_priv *priv = ssaiot_sc_accel_iio_priv(indio_dev);
 
-	return test_bit(chan->address, &motion->events);
+	return test_bit(chan->address, &priv->events);
 }
 
 static int ssaiot_sc_accel_write_event_config(struct iio_dev *indio_dev,
@@ -276,7 +271,7 @@ static int ssaiot_sc_accel_write_event_config(struct iio_dev *indio_dev,
 					      enum iio_event_direction dir,
 					      int state)
 {
-	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
+	struct ssaiot_sc_accel_priv *priv = ssaiot_sc_accel_iio_priv(indio_dev);
 
 	/*
 	 * The irq depth is a refcount and sysfs does not filter repeated writes,
@@ -284,15 +279,15 @@ static int ssaiot_sc_accel_write_event_config(struct iio_dev *indio_dev,
 	 * Nothing serialises two writers of the same attribute.
 	 */
 	if (state) {
-		if (test_and_set_bit(chan->address, &motion->events))
+		if (test_and_set_bit(chan->address, &priv->events))
 			return 0;
 
-		enable_irq(motion->event_irq[chan->address]);
+		enable_irq(priv->event_irq[chan->address]);
 	} else {
-		if (!test_and_clear_bit(chan->address, &motion->events))
+		if (!test_and_clear_bit(chan->address, &priv->events))
 			return 0;
 
-		disable_irq(motion->event_irq[chan->address]);
+		disable_irq(priv->event_irq[chan->address]);
 	}
 
 	return 0;
@@ -371,11 +366,10 @@ static const unsigned long ssaiot_sc_accel_motion_scan_masks[] = {
 };
 
 static int ssaiot_sc_accel_request_event(struct device *dev,
-					 struct iio_dev *indio_dev,
+					 struct ssaiot_sc_accel_priv *priv,
 					 enum ssaiot_sc_accel_ev ev,
 					 const char *name, irq_handler_t handler)
 {
-	struct ssaiot_sc_accel_motion *motion = iio_priv(indio_dev);
 	int irq, ret;
 
 	irq = platform_get_irq_byname(to_platform_device(dev), name);
@@ -384,32 +378,28 @@ static int ssaiot_sc_accel_request_event(struct device *dev,
 
 	ret = devm_request_threaded_irq(dev, irq, NULL, handler,
 					IRQF_ONESHOT | IRQF_NO_AUTOEN,
-					name, indio_dev);
+					name, priv->motion_iio);
 	if (ret)
 		return ret;
 
-	motion->event_irq[ev] = irq;
+	priv->event_irq[ev] = irq;
 
 	return 0;
 }
 
 static int ssaiot_sc_accel_probe_motion(struct device *dev,
-					struct ssaiot_sc_priv *sc,
 					struct ssaiot_sc_accel_priv *priv)
 {
-	struct ssaiot_sc_accel_motion *motion;
 	struct iio_dev *indio_dev;
 	int ret;
 
-	indio_dev = devm_iio_device_alloc(dev, sizeof(*motion));
+	indio_dev = devm_iio_device_alloc(dev, sizeof(priv));
 	if (!indio_dev)
 		return -ENOMEM;
 
-	motion = iio_priv(indio_dev);
-	motion->sc = sc;
-	motion->indio_dev = indio_dev;
-	priv->motion = motion;
-	INIT_DELAYED_WORK(&motion->work, ssaiot_sc_accel_motion_poll);
+	*(struct ssaiot_sc_accel_priv **)iio_priv(indio_dev) = priv;
+	priv->motion_iio = indio_dev;
+	INIT_DELAYED_WORK(&priv->motion_work, ssaiot_sc_accel_motion_poll);
 
 	indio_dev->name = "ssaiot-sc-accel";
 	indio_dev->modes = INDIO_DIRECT_MODE;
@@ -423,17 +413,17 @@ static int ssaiot_sc_accel_probe_motion(struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_request_event(dev, indio_dev, SSAIOT_SC_ACCEL_EV_MOTION,
+	ret = ssaiot_sc_accel_request_event(dev, priv, SSAIOT_SC_ACCEL_EV_MOTION,
 					    "motion", ssaiot_sc_accel_motion_event);
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_request_event(dev, indio_dev, SSAIOT_SC_ACCEL_EV_TILT,
+	ret = ssaiot_sc_accel_request_event(dev, priv, SSAIOT_SC_ACCEL_EV_TILT,
 					    "tilt", ssaiot_sc_accel_tilt_event);
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_request_event(dev, indio_dev, SSAIOT_SC_ACCEL_EV_FREEFALL,
+	ret = ssaiot_sc_accel_request_event(dev, priv, SSAIOT_SC_ACCEL_EV_FREEFALL,
 					    "freefall", ssaiot_sc_accel_freefall_event);
 	if (ret)
 		return ret;
@@ -448,16 +438,16 @@ static int ssaiot_sc_accel_probe_motion(struct device *dev,
  */
 static void ssaiot_sc_accel_temp_poll(struct work_struct *work)
 {
-	struct ssaiot_sc_accel_thermal *thermal =
+	struct ssaiot_sc_accel_priv *priv =
 		container_of(to_delayed_work(work),
-			     struct ssaiot_sc_accel_thermal, work);
+			     struct ssaiot_sc_accel_priv, temp_work);
 	unsigned int delay_ms = SSAIOT_SC_ACCEL_TEMP_IDLE_MS;
 	struct ssaiot_sc_accel_temp_resp resp;
 	s64 ts_ref;
 	u8 len;
 	int n, i;
 
-	n = ssaiot_sc_xfer(thermal->sc, SSAIOT_SC_CMD_SENSOR_READ,
+	n = ssaiot_sc_xfer(priv->sc, SSAIOT_SC_CMD_SENSOR_READ,
 			   SSAIOT_SC_SENSOR_ACCEL_TEMP, NULL, 0,
 			   (u8 *)&resp, sizeof(resp), &len, NULL, &ts_ref);
 	if (!n)
@@ -465,15 +455,15 @@ static void ssaiot_sc_accel_temp_poll(struct work_struct *work)
 					    sizeof(resp.sample[0]));
 
 	if (n < 0) {
-		dev_warn_ratelimited(thermal->sc->dev,
+		dev_warn_ratelimited(priv->sc->dev,
 				     "temperature read failed: %d.\n", n);
 	} else {
 		for (i = 0; i < n; i++) {
-			thermal->scan.temp =
+			priv->temp_scan.temp =
 				(s16)le16_to_cpu(resp.sample[i].temp);
 
-			iio_push_to_buffers_with_timestamp(thermal->indio_dev,
-					&thermal->scan,
+			iio_push_to_buffers_with_timestamp(priv->temp_iio,
+					&priv->temp_scan,
 					ssaiot_sc_accel_timestamp(ts_ref, resp.now,
 							resp.sample[i].timestamp));
 		}
@@ -483,25 +473,25 @@ static void ssaiot_sc_accel_temp_poll(struct work_struct *work)
 			delay_ms = 0;
 	}
 
-	queue_delayed_work(thermal->sc->wq, &thermal->work,
+	queue_delayed_work(priv->sc->wq, &priv->temp_work,
 			   msecs_to_jiffies(delay_ms));
 }
 
 static int ssaiot_sc_accel_temp_postenable(struct iio_dev *indio_dev)
 {
-	struct ssaiot_sc_accel_thermal *thermal = iio_priv(indio_dev);
+	struct ssaiot_sc_accel_priv *priv = ssaiot_sc_accel_iio_priv(indio_dev);
 
-	queue_delayed_work(thermal->sc->wq, &thermal->work, 0);
+	queue_delayed_work(priv->sc->wq, &priv->temp_work, 0);
 
 	return 0;
 }
 
 static int ssaiot_sc_accel_temp_predisable(struct iio_dev *indio_dev)
 {
-	struct ssaiot_sc_accel_thermal *thermal = iio_priv(indio_dev);
+	struct ssaiot_sc_accel_priv *priv = ssaiot_sc_accel_iio_priv(indio_dev);
 
 	/* safe against the work re-queueing itself */
-	cancel_delayed_work_sync(&thermal->work);
+	cancel_delayed_work_sync(&priv->temp_work);
 
 	return 0;
 }
@@ -558,22 +548,18 @@ static const struct iio_chan_spec ssaiot_sc_accel_temp_channels[] = {
 };
 
 static int ssaiot_sc_accel_probe_temp(struct device *dev,
-				      struct ssaiot_sc_priv *sc,
 				      struct ssaiot_sc_accel_priv *priv)
 {
-	struct ssaiot_sc_accel_thermal *thermal;
 	struct iio_dev *indio_dev;
 	int ret;
 
-	indio_dev = devm_iio_device_alloc(dev, sizeof(*thermal));
+	indio_dev = devm_iio_device_alloc(dev, sizeof(priv));
 	if (!indio_dev)
 		return -ENOMEM;
 
-	thermal = iio_priv(indio_dev);
-	thermal->sc = sc;
-	thermal->indio_dev = indio_dev;
-	priv->thermal = thermal;
-	INIT_DELAYED_WORK(&thermal->work, ssaiot_sc_accel_temp_poll);
+	*(struct ssaiot_sc_accel_priv **)iio_priv(indio_dev) = priv;
+	priv->temp_iio = indio_dev;
+	INIT_DELAYED_WORK(&priv->temp_work, ssaiot_sc_accel_temp_poll);
 
 	indio_dev->name = "ssaiot-sc-accel-temp";
 	indio_dev->modes = INDIO_DIRECT_MODE;
@@ -593,7 +579,6 @@ static int ssaiot_sc_accel_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct ssaiot_sc_accel_priv *priv;
-	struct ssaiot_sc_priv *sc;
 	int ret;
 
 	/* the mfd cell has no dedicated dt node, reuse parent */
@@ -604,21 +589,21 @@ static int ssaiot_sc_accel_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	platform_set_drvdata(pdev, priv);
-	sc = dev_get_drvdata(dev->parent);
+	priv->sc = dev_get_drvdata(dev->parent);
 
 	device_init_wakeup(dev, true);
 
-	ret = ssaiot_sc_irq_claim(sc, SSAIOT_SC_INT_SRC_ACC,
+	ret = ssaiot_sc_irq_claim(priv->sc, SSAIOT_SC_INT_SRC_ACC,
 				  device_may_wakeup(dev));
 	if (ret)
 		return ret;
 
-	ret = ssaiot_sc_accel_probe_motion(dev, sc, priv);
+	ret = ssaiot_sc_accel_probe_motion(dev, priv);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "Failed to register motion device.\n");
 
-	ret = ssaiot_sc_accel_probe_temp(dev, sc, priv);
+	ret = ssaiot_sc_accel_probe_temp(dev, priv);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "Failed to register temperature device.\n");
@@ -632,11 +617,11 @@ static void ssaiot_sc_accel_shutdown(struct platform_device *pdev)
 	struct ssaiot_sc_accel_priv *priv = platform_get_drvdata(pdev);
 
 	/* stop work to release the bus */
-	cancel_delayed_work_sync(&priv->motion->work);
-	cancel_delayed_work_sync(&priv->thermal->work);
+	cancel_delayed_work_sync(&priv->motion_work);
+	cancel_delayed_work_sync(&priv->temp_work);
 
 	/* apply wake-up policy */
-	ssaiot_sc_irq_set_poweron(priv->motion->sc, SSAIOT_SC_INT_SRC_ACC,
+	ssaiot_sc_irq_set_poweron(priv->sc, SSAIOT_SC_INT_SRC_ACC,
 				  device_may_wakeup(&pdev->dev));
 }
 
