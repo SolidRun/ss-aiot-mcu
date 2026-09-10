@@ -53,8 +53,10 @@ void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 
 /* 0x13 0x02 - placeholder. Accepts and discards its payload; the presence and
  * motion thresholds are fixed at IR_THS_DEFAULT. */
-void Sensor_IR_Config(uint8_t *cmd_data){
+void Sensor_IR_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *status){
 	(void)cmd_data;
+	(void)cmd_len;
+	*status = 0;
 }
 
 void Sensor_Accel_Motion_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
@@ -95,8 +97,9 @@ void Sensor_Accel_Temp_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
 
 /* 0x13 0x03 - placeholder. Accepts and discards its payload; the wake-up
  * threshold is fixed at ACC_THS_DEFAULT. */
-void Sensor_Accel_Config(uint8_t *cmd_data, uint8_t *status){
+void Sensor_Accel_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *status){
 	(void)cmd_data;
+	(void)cmd_len;
 	*status = 0;
 }
 
@@ -212,12 +215,12 @@ void Sensor_GPS_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     }
 }
 
-void Sensor_GPS_Config(uint8_t *cmd_data){
-
-	int RSTN_PinState = cmd_data[0];
-	int EN_PinState = cmd_data[1];
-	HAL_GPIO_WritePin(GPIOB, GPS_RSTN_Pin, RSTN_PinState);
-	HAL_GPIO_WritePin(GNSS_PWR_EN_GPIO_Port, GNSS_PWR_EN_Pin, EN_PinState);
+/* 0x13 0x04 - placeholder. Accepts and discards its payload; GPS_RSTN and
+ * GNSS_PWR_EN stay as MX_GPIO_Init() left them, powered and out of reset. */
+void Sensor_GPS_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *status){
+	(void)cmd_data;
+	(void)cmd_len;
+	*status = 0;
 }
 
 void INT_Read(uint8_t *data, uint8_t *len) {
@@ -314,16 +317,16 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         case CMD_SENSOR_CONFIG:
         	switch (cmd->sensor_id) {
         		case SENSOR_IR:
-        			Sensor_IR_Config(cmd->data);
+        			Sensor_IR_Config(cmd->data, cmd->data_len, &resp->status);
         			break;
         		case SENSOR_ACCEL_MOTION:
-        			Sensor_Accel_Config(cmd->data, &resp->status);
+        			Sensor_Accel_Config(cmd->data, cmd->data_len, &resp->status);
         			break;
         		case SENSOR_RTC:
         			Sensor_RTC_Config(cmd->data , &resp->status);
         			break;
         		case SENSOR_GPS:
-        			Sensor_GPS_Config(cmd->data);
+        			Sensor_GPS_Config(cmd->data, cmd->data_len, &resp->status);
         			break;
         		case SENSOR_ALARM:
         			Sensor_Alarm_Config(cmd->data, cmd->data_len, &resp->status);

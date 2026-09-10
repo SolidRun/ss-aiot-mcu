@@ -231,12 +231,12 @@ Multi-byte values are little-endian unless stated otherwise.
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
 | Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb)}}, N = 0..5 |
-| Configure IR                   | {0x13,0x02,0x00,{}}     | {0x00,0x00,{}} — payload ignored            |
+| Read IR config                 | {0x13,0x02,0x00,{}}     | {0x00,0x00,{}} — placeholder, no configuration |
 | Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..8 |
 | Read ACC temperature           | {0x12,0x0A,0x00,{}}     | {0x00,4+6×N,{uint32 now, N × (uint32 timestamp, int16 temp)}}, N = 0..1 |
-| Configure accelerometer        | {0x13,0x03,0x00,{}}     | {0x00,0x00,{}} — payload ignored            |
+| Read ACC config                | {0x13,0x03,0x00,{}}     | {0x00,0x00,{}} — placeholder, no configuration |
 | Read GPS data                  | {0x12,0x04,0x00,{}}     | {0x00,32,{32 raw NMEA bytes}} / {0x01,32,{padding}} if nothing queued |
-| Configure GPS power/reset      | {0x13,0x04,0x02,{RSTN,EN}} | {0x00,0x00,{}}                          |
+| Read GPS config                | {0x13,0x04,0x00,{}}     | {0x00,0x00,{}} — placeholder, no configuration |
 | Read battery status            | {0x12,0x05,0x00,{}}     | {0x00,7,{flags, int16 ibat, uint16 vbat, uint16 vbus}} |
 | Read current time              | {0x12,0x06,0x00,{}}     | {0x00,6,{YY,MM,DD,HH,MM,SS}}              |
 | Sync RTC from GPS              | {0x13,0x06,0x00,{}}     | {0x00,0x00,{}}                             |
@@ -250,7 +250,8 @@ Multi-byte values are little-endian unless stated otherwise.
 
 Notes on individual commands:
 
-- **Configure IR** is a placeholder. It discards its payload.
+- **Read IR config** is a placeholder. There is no configuration to report, and
+  a payload sent to set one is discarded.
 - **Read IR data** opens with a snapshot of the MCU timebase and then hands out
   captured samples, oldest first, as fixed 10-byte records with no padding:
 
@@ -353,7 +354,8 @@ Notes on individual commands:
   reading turns up about every 0.6 s.
 
   The offset is untrimmed at **±15 °C** — see [Temperature](#temperature).
-- **Configure accelerometer** is a placeholder. It discards its payload.
+- **Read ACC config** is a placeholder. There is no configuration to report, and
+  a payload sent to set one is discarded.
 - **Set daily alarm** takes three binary bytes, 24-hour: hour, minute, second.
   The alarm has **no date** — it matches that time of day, every day, because the
   hardware alarm can compare a day-of-month or a weekday and a time, and nothing
@@ -410,8 +412,8 @@ Notes on individual commands:
   Sending a command after short read discards the `DATA_LEN` bytes of data.
   See [GPS NMEA Passthrough](#24-gps-nmea-passthrough) — reading this command
   correctly requires more than the table row above.
-- **Configure GPS power/reset** drives `GPS_RSTN` and `GNSS_PWR_EN`.
-  Use `0` or `1` per byte.
+- **Read GPS config** is a placeholder. There is no configuration to report, and
+  a payload sent to set one is discarded.
 - **Read current time** returns **binary** values (not BCD). Hour 23 is `0x17`.
   `STATUS = 0x01` means the calendar has never been set from GNSS — the six data
   bytes are still returned, but they are the RTC's power-on default and mean
@@ -455,7 +457,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x08` (armed alarm) | 5 | immediate |
 | `0x11,0x08` (cancel alarm) | 2 | immediate |
 | `0x11,0x09` (power-off som) | 2 | response immediate, power-off after 1s |
-| `0x13,*` (config) | 2 | IR re-init: several I2C1 writes; ACC and alarm: immediate |
+| `0x13,*` (config) | 2 | immediate; alarm writes the RTC |
 
 ### 2.4 GPS NMEA Passthrough:
 
@@ -992,6 +994,8 @@ Current firmware behaviour the master side should be aware of.
 - **`0x13 0x03` (configure accelerometer) does nothing.** It returns
   `STATUS = 0x00` and discards its payload. The wake-up threshold is fixed at
   build time.
+- **`0x13 0x04` (configure GPS) does nothing.** It returns `STATUS = 0x00` and
+  discards its payload.
 - **Free-fall fires, but the threshold is untuned against a real fall.** It has
   been seen to set on a sharp lift by hand, which is not the same thing. See
   [Free-fall](#free-fall).
