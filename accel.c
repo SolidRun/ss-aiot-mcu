@@ -5,6 +5,7 @@
  * Copyright (C) 2026 Josua Mayer <josua@solid-run.com>
  */
 
+#include <linux/bitmap.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/events.h>
 #include <linux/iio/iio.h>
@@ -626,6 +627,57 @@ static void ssaiot_sc_accel_shutdown(struct platform_device *pdev)
 }
 
 /*
+ * Only the detectors userspace enabled can assert, so those are the ones to
+ * arm. Their wake references have to be given back one for one, which holds
+ * because userspace is frozen before this runs and cannot change the set.
+ */
+static int ssaiot_sc_accel_suspend(struct device *dev)
+{
+	struct ssaiot_sc_accel_priv *priv = dev_get_drvdata(dev);
+	unsigned int ev, armed;
+	int ret;
+
+	/* check if device is set as wakeup source */
+	if (!device_may_wakeup(dev))
+		return 0;
+
+	/* enable irq wakeup */
+	for_each_set_bit(ev, &priv->events, SSAIOT_SC_ACCEL_EV_MAX) {
+		ret = enable_irq_wake(priv->event_irq[ev]);
+		if (ret)
+			goto err;
+	}
+
+	return 0;
+
+err:
+	/* a device whose suspend failed is not resumed, so unwind here */
+	for_each_set_bit(armed, &priv->events, ev)
+		disable_irq_wake(priv->event_irq[armed]);
+
+	return ret;
+}
+
+static int ssaiot_sc_accel_resume(struct device *dev)
+{
+	struct ssaiot_sc_accel_priv *priv = dev_get_drvdata(dev);
+	unsigned int ev;
+
+	/* check if device was set as wakeup source */
+	if (!device_may_wakeup(dev))
+		return 0;
+
+	/* disable irq wakeup */
+	for_each_set_bit(ev, &priv->events, SSAIOT_SC_ACCEL_EV_MAX)
+		disable_irq_wake(priv->event_irq[ev]);
+
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(ssaiot_sc_accel_pm_ops, ssaiot_sc_accel_suspend,
+				ssaiot_sc_accel_resume);
+
+/*
  * The id must match the MFD cell name and is capped at PLATFORM_NAME_SIZE,
  * so it stays short. Since an id table suppresses the driver name fallback in
  * platform_match(), the driver name itself is free to be descriptive.
@@ -639,6 +691,7 @@ MODULE_DEVICE_TABLE(platform, ssaiot_sc_accel_id_table);
 static struct platform_driver ssaiot_sc_accel_driver = {
 	.driver = {
 		.name = "solidsense-aiot-system-controller-accel",
+		.pm = pm_sleep_ptr(&ssaiot_sc_accel_pm_ops),
 	},
 	.probe = ssaiot_sc_accel_probe,
 	.shutdown = ssaiot_sc_accel_shutdown,
