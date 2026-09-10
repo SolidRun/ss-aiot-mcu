@@ -11,6 +11,10 @@
 
 #include "ssaiot_sc.h"
 
+/* ensure u8 (protocol data-len field) can never overrun buffers */
+static_assert(SSAIOT_SC_CMD_MAX_DATA_LEN >= U8_MAX);
+static_assert(SSAIOT_SC_RESP_MAX_DATA_LEN >= U8_MAX);
+
 /**
  * ssaiot_sc_xfer() - Execute one system controller command
  * @priv: Driver private structure
@@ -33,10 +37,11 @@
  * write completes and stretches SCL until the response is armed, so no delay
  * between the two phases is required.
  *
- * @rx_len must match exactly what the firmware arms for this command - see the
- * response length table in the firmware README. The controller has nothing to
- * send past its armed length and keeps stretching SCL if asked for more, which
- * wedges the bus until its stuck-bus watchdog fires roughly ten seconds later.
+ * The controller arms every response at its full 257-byte transmit buffer -
+ * STATUS, DATA_LEN and 255 of payload - so any @rx_len completes and need not
+ * match what the command produces. Only a read past 257 bytes leaves the
+ * controller with nothing to send, and it then keeps stretching SCL until its
+ * watchdog fires. @rx_len is a u8, so this function cannot ask for that much.
  *
  * How much of that fixed read is meaningful is a separate question. Most
  * commands fill it entirely and pass no @rx_len_valid, which asks for the
@@ -75,10 +80,6 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 	};
 	u8 resp_status, resp_len;
 	int ret;
-
-	if (tx_len > SSAIOT_SC_CMD_MAX_DATA_LEN ||
-	    rx_len > SSAIOT_SC_RESP_MAX_DATA_LEN)
-		return -EMSGSIZE;
 
 	if ((tx_len && !tx) || (rx_len && !rx))
 		return -EINVAL;
