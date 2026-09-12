@@ -6,4 +6,3 @@ Release/
 *.map
 *.list
 *.su
-/Core/Inc/build_id.h

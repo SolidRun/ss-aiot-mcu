@@ -40,6 +40,7 @@ typedef enum {
     SENSOR_ALARM           = 0x08, // RTC alarm, a time of day
     SENSOR_SOM             = 0x09, // SOM power rail, Turn OFF only
     SENSOR_ACCEL_TEMP      = 0x0A, // Accelerometer die temperature
+    SENSOR_MCU             = 0x0B, // The firmware itself
 } SensorID_t;
 
 /* Command structure
@@ -95,6 +96,20 @@ _Static_assert(I2C_RESP_MAX_PAYLOAD
 
 /* ensure gps chunk size agrees with max payload size */
 _Static_assert(GPS_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "GPS_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
+
+/* mcu information payload, {API_VERSION, FLAGS, uint32 BUILD_ID} */
+#define MCU_INFO_LEN 6U
+
+/* Version of this protocol the firmware implements. Byte 0 of the mcu
+ * information payload and the one field whose offset never moves, so a master
+ * can read it before it trusts the layout of anything else. */
+#define MCU_API_VERSION 0U
+
+/* mcu information flags, byte 1 of the payload */
+#define MCU_FLAG_BUILD_DIRTY 0x01U
+
+/* ensure the mcu information fits a response */
+_Static_assert(MCU_INFO_LEN <= I2C_RESP_MAX_PAYLOAD, "MCU_INFO_LEN > I2C_RESP_MAX_PAYLOAD");
 
 /* alarm configuration flags, byte 0 of the payload. */
 #define ALARM_FLAG_ARMED 0x01U

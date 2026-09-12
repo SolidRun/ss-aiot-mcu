@@ -10,6 +10,10 @@
 #include "nmea.h"
 #include <string.h>
 
+/* Overwritten before every build, by the pre-build step in .cproject and by the
+ * workflow. Included here alone, so a new commit rebuilds this object only. */
+#include "build_id.h"
+
 extern volatile bool gps_time_synced;
 extern volatile bool gps_time_sync_request;
 
@@ -228,6 +232,26 @@ void Sensor_GPS_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *status){
 	*status = 0;
 }
 
+/* 0x12 0x0B - report what this firmware is: the protocol version it speaks and
+ * the commit it was built from. */
+void MCU_Info_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
+    uint32_t build_id = BUILD_ID;
+
+    data[0] = MCU_API_VERSION;
+    data[1] = 0U;
+
+    /* the generator defines this only when the tree was dirty */
+#ifdef BUILD_ID_DIRTY
+    data[1] |= MCU_FLAG_BUILD_DIRTY;
+#endif
+
+    /* little-endian, and the tx buffer is not word aligned */
+    memcpy(&data[2], &build_id, sizeof(build_id));
+
+    *len = MCU_INFO_LEN;
+    *status = 0;
+}
+
 void INT_Read(uint8_t *data, uint8_t *len) {
     *len = 5;
     somTakeInterrupts(&data[0], &data[1], &data[2], &data[3], &data[4]);
@@ -308,6 +332,9 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
                     break;
                 case INTERRUPTS:
                 	INT_Read(resp->data, &resp->data_len);
+                    break;
+                case SENSOR_MCU:
+                    MCU_Info_Read(resp->data, &resp->data_len, &resp->status);
                     break;
                 default:
                     resp->status = 1; // Unknown sensor

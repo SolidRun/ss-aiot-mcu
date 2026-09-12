@@ -20,6 +20,8 @@ This project implements an I2C slave interface on the STM32U031C8 MCU to control
 
 -Interrupts (MCU, IR, ACC)
 
+-MCU firmware identity (protocol version, build)
+
 ## Table of Contents:
 
 1. I2C Interface
@@ -227,6 +229,7 @@ Multi-byte values are little-endian unless stated otherwise.
 
 | Command Description           | Command                  | Expected Response                           |
 |-------------------------------|--------------------------|--------------------------------------------|
+| Read MCU info                  | {0x12,0x0B,0x00,{}}     | {0x00,6,{API_VERSION, FLAGS, uint32 BUILD_ID}} |
 | Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
@@ -249,6 +252,26 @@ Multi-byte values are little-endian unless stated otherwise.
 
 Notes on individual commands:
 
+- **Read MCU info** identifies the firmware:
+
+  | Byte | Field | Encoding |
+  |------|-------|----------|
+  | 0 | `API_VERSION` | version of this protocol the firmware implements, currently `0` |
+  | 1 | `FLAGS` | `0x01` the working tree was dirty when the firmware was built |
+  | 2-5 | `BUILD_ID` | uint32, the abbreviated commit the firmware was built from |
+
+  `API_VERSION` is `0` while the protocol is pre-release, and every command in
+  this document may still change without it moving. **Byte 0 is the one field
+  whose offset is fixed for good** — read it before trusting the layout of
+  anything else, including the rest of this response.
+
+  `BUILD_ID` is little-endian like every other multi-byte field, so its
+  hexadecimal form read back as a number is the abbreviated hash: `git log` at
+  `8636a822` arrives as `22 a8 36 86`. It is `0` when the firmware was built
+  without git, from an export for instance, which is also when `FLAGS` cannot
+  say anything about the tree.
+
+  `STATUS` is always `0x00`.
 - **Read IR config** is a placeholder. There is no configuration to report, and
   a payload sent to set one is discarded.
 - **Read IR data** opens with a snapshot of the MCU timebase and then hands out
@@ -451,6 +474,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | Command | Bytes to read | Typical latency |
 |---------|---------------|-----------------|
 | `0x10` / `0x11` (LED on/off) | 2 | immediate |
+| `0x12,0x0B` (MCU info) | 8 | immediate |
 | `0x12,0x01` (LED status) | 3 | immediate |
 | `0x12,0x02` (IR data) | 56 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
 | `0x12,0x03` (ACC motion data) | 86 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
