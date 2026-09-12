@@ -256,6 +256,9 @@ bool rtc_setDailyAlarm(uint8_t Hours, uint8_t Minutes, uint8_t Seconds)
 {
   RTC_AlarmTypeDef sAlarm = {0};
 
+  if ((Hours > 23U) || (Minutes > 59U) || (Seconds > 59U))
+    return false;
+
   sAlarm.AlarmTime.Hours          = Hours;
   sAlarm.AlarmTime.Minutes        = Minutes;
   sAlarm.AlarmTime.Seconds        = Seconds;

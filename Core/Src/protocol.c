@@ -130,38 +130,43 @@ void Sensor_RTC_Config(uint8_t *cmd_data ,uint8_t *status){
 	gps_time_sync_request = true ;
 }
 
-/* 0x13 0x08 - arm the daily alarm from {HH, MM, SS}, binary, 24-hour.
+/* 0x13 0x08 - read or replace the alarm configuration, {FLAGS, HH, MM, SS}.
  *
- * Cancelling is 0x11 0x08, not a magic time value, so 00:00:00 is settable like
- * any other time. */
-void Sensor_Alarm_Config(uint8_t *cmd_data, uint8_t data_len, uint8_t *status)
-{
-	if (data_len != 3U) {
-		*status = 1;
-		return;
-	}
-
-	if ((cmd_data[0] > 23U) || (cmd_data[1] > 59U) || (cmd_data[2] > 59U)) {
-		*status = 1;
-		return;
-	}
-
-	*status = rtc_setDailyAlarm(cmd_data[0], cmd_data[1], cmd_data[2]) ? 0U : 1U;
-}
-
-/* 0x12 0x08 - report the armed alarm.
- *
- * STATUS is 0 when an alarm is set and armed.
- * STATUS is 1 when no alarm is active or was never set.
+ * An empty payload reads it; a full one replaces it first. The response
+ * carries the effective configuration.
  */
-void Sensor_Alarm_Read(uint8_t *data, uint8_t *len, uint8_t *status)
+void Sensor_Alarm_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *data,
+                         uint8_t *len, uint8_t *status)
 {
-	*len = 3;
+    static const uint8_t alrm_cfg_len = 4;
 
-    if (rtc_getAlarm(&data[0], &data[1], &data[2]))
-        *status = 0;
-    else
+    *status = 0;
+
+    if (cmd_len == 0) {
+        /* read, no-op */
+    } else if (cmd_len == alrm_cfg_len) {
+		if (cmd_data[0] & ALARM_FLAG_ARMED) {
+	        if (!rtc_setDailyAlarm(cmd_data[1], cmd_data[2], cmd_data[3]))
+		        *status = 1;
+        } else {
+            rtc_cancelAlarm();
+        }
+	} else {
+        /* invalid payload length */
         *status = 1;
+    }
+
+    /* always return effective status */
+	*len = alrm_cfg_len;
+
+    /* init flags */
+    data[0] = 0;
+
+    /* get alarm status and time */
+    if (rtc_getAlarm(&data[1], &data[2], &data[3])) {
+        /* alarm active */
+        data[0] |= ALARM_FLAG_ARMED;
+    }
 }
 
 /* Pass through the reading BQ25638_Process() cached, no bus access. */
@@ -271,8 +276,6 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         case CMD_SENSOR_OFF:
             if (cmd->sensor_id == SENSOR_LED) {
                 Sensor_LED_Off();
-            } else if (cmd->sensor_id == SENSOR_ALARM) {
-                rtc_cancelAlarm();
             } else if (cmd->sensor_id == SENSOR_SOM) {
                 /* schedule power-off after 1s */
                 SomScheduleOff(1000);
@@ -303,9 +306,6 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
                 case SENSOR_BATTERY_CHARGER:
                 	Sensor_Charger_Read(resp->data, &resp->data_len, &resp->status);
                     break;
-                case SENSOR_ALARM:
-                    Sensor_Alarm_Read(resp->data, &resp->data_len, &resp->status);
-                    break;
                 case INTERRUPTS:
                 	INT_Read(resp->data, &resp->data_len);
                     break;
@@ -329,7 +329,8 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         			Sensor_GPS_Config(cmd->data, cmd->data_len, &resp->status);
         			break;
         		case SENSOR_ALARM:
-        			Sensor_Alarm_Config(cmd->data, cmd->data_len, &resp->status);
+        			Sensor_Alarm_Config(cmd->data, cmd->data_len, resp->data,
+        			                    &resp->data_len, &resp->status);
         			break;
         		case INTERRUPTS:
         			INT_Config(cmd->data, cmd->data_len, resp->data,

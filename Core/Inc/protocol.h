@@ -96,6 +96,9 @@ _Static_assert(I2C_RESP_MAX_PAYLOAD
 /* ensure gps chunk size agrees with max payload size */
 _Static_assert(GPS_CHUNK_MAX <= I2C_RESP_MAX_PAYLOAD, "GPS_CHUNK_MAX > I2C_RESP_MAX_PAYLOAD");
 
+/* alarm configuration flags, byte 0 of the payload. */
+#define ALARM_FLAG_ARMED 0x01U
+
 /* interrupt configuration payload,
  * {EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC} */
 #define INT_CONFIG_LEN 6U

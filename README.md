@@ -243,9 +243,8 @@ Multi-byte values are little-endian unless stated otherwise.
 | Read interrupt status          | {0x12,0x07,0x00,{}}     | {0x00,5,{SOURCES, MCU, IR, ACC, RTC}}       |
 | Read interrupt config          | {0x13,0x07,0x00,{}}     | {0x00,6,{EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC}} |
 | Set interrupt config           | {0x13,0x07,0x06,{EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC}} | {0x00,6,{EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC}} |
-| Set daily alarm                | {0x13,0x08,0x03,{HH,MM,SS}} | {0x00,0x00,{}}                         |
-| Cancel alarm                   | {0x11,0x08,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read armed alarm               | {0x12,0x08,0x00,{}}     | {0x00,3,{HH,MM,SS}}                        |
+| Read alarm config              | {0x13,0x08,0x00,{}}     | {0x00,4,{FLAGS, HH, MM, SS}}                |
+| Set alarm config               | {0x13,0x08,0x04,{FLAGS, HH, MM, SS}} | {0x00,4,{FLAGS, HH, MM, SS}}  |
 | Turn OFF SoM                   | {0x11,0x09,0x00,{}}     | {0x00,0x00,{}}                             |
 
 Notes on individual commands:
@@ -356,25 +355,32 @@ Notes on individual commands:
   The offset is untrimmed at **±15 °C** — see [Temperature](#temperature).
 - **Read ACC config** is a placeholder. There is no configuration to report, and
   a payload sent to set one is discarded.
-- **Set daily alarm** takes three binary bytes, 24-hour: hour, minute, second.
+- **Alarm config** is one command for both directions. An empty payload reads the
+  configuration, a four-byte payload replaces it. The response carries the
+  configuration in effect after the command:
+
+  | Byte | Field | Meaning |
+  |------|-------|---------|
+  | 0 | `FLAGS` | `0x01` an alarm is armed |
+  | 1 | `HH` | hour, binary, 24-hour |
+  | 2 | `MM` | minute |
+  | 3 | `SS` | second |
+
+  Setting `0x01` arms a daily alarm at the time that follows. Clearing it cancels,
+  and the time bytes are ignored, so `00:00:00` is settable like any other time.
+
   The alarm has **no date** — it matches that time of day, every day, because the
   hardware alarm can compare a day-of-month or a weekday and a time, and nothing
   wider. It stays armed after it fires, so it comes round again the next day.
 
-  `STATUS = 0x01` means the payload was not three bytes, or a field was out of
-  range (hour > 23, minute or second > 59). Nothing is changed in that case: an
-  alarm that was already armed stays armed.
+  `STATUS = 0x01` means the payload was invalid, or an internal error occured.
+  The response still carries the effective configuration.
 
   The alarm and its interrupt enable live in the RTC's backup domain, so **an
   armed alarm survives an MCU reset** for as long as VBAT holds. That is
   deliberate — it is what lets the alarm wake a SOM that was off when the MCU
-  restarted — but it means the master cannot assume a fresh MCU has no alarm. Use
-  `Read armed alarm` to find out.
-- **Cancel alarm** is `Turn OFF` on the alarm sensor ID. There is no magic time
-  value that means "cancel", so `00:00:00` is settable like any other time.
-- **Read armed alarm** reports the time of an armed alarm, if any.
-  `STATUS = 0x01` means no alarm is currently armed, and the time bytes that follow
-  are without meaning.
+  restarted — but it means the master cannot assume a fresh MCU has no alarm. Read
+  the configuration to find out.
 - **Read interrupt status** is described in full under
   [What the interrupt status register contains](#what-the-interrupt-status-register-contains).
   It is the only command that clears interrupt state, and the only one that releases
@@ -432,7 +438,7 @@ Notes on individual commands:
   itself from GNSS with no involvement from the master; the command exists to
   force it early.
 - **Turn ON** is implemented for `SENSOR_LED` only.
-- **Turn OFF** is implemented for both `SENSOR_LED` and `SoM` (CPU).
+- **Turn OFF** is implemented for `SENSOR_LED` and `SoM` (CPU).
 - **Turn OFF SoM** must cut power unless fatal internal error occured, since it is too late for host to reconsider.
   Cutting power must be delayed by 1s after i2c response, giving sufficient time for host to process final interrupts.
 
@@ -454,8 +460,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x12,0x06` (time) | 8 | immediate |
 | `0x12,0x07` (interrupt status) | 7 | immediate — snapshots RAM latches, no bus access |
 | `0x13,0x07` (interrupt config) | 8 | immediate |
-| `0x12,0x08` (armed alarm) | 5 | immediate |
-| `0x11,0x08` (cancel alarm) | 2 | immediate |
+| `0x13,0x08` (alarm config) | 6 | immediate |
 | `0x11,0x09` (power-off som) | 2 | response immediate, power-off after 1s |
 | `0x13,*` (config) | 2 | immediate; alarm writes the RTC |
 
@@ -911,8 +916,9 @@ Current firmware behaviour the master side should be aware of.
   `STATUS = 0x00`, `DATA_LEN = 0x00`, and a zeroed tail because the transmit
   buffer starts in `.bss`. It is indistinguishable from a successful command that
   produced no payload.
-- **`Turn ON` / `Turn OFF` with a sensor ID other than `SENSOR_LED`** return
-  `STATUS = 0x00` without doing anything.
+- **`Turn ON` with any sensor ID other than `SENSOR_LED`** returns
+  `STATUS = 0x00` without doing anything, as does **`Turn OFF`** with any ID
+  other than `SENSOR_LED` or `SENSOR_SOM`.
 - **Only `Read interrupt status` clears interrupt state.** Neither `Read IR data`
   nor the accelerometer reads carry or clear it; the accelerometer's event bits
   are reported solely by `Read interrupt status`. The accelerometer notifies the
