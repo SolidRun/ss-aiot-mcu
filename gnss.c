@@ -53,7 +53,7 @@ static void ssaiot_sc_gnss_poll(struct work_struct *work)
 						   struct ssaiot_sc_gnss, work);
 	u8 buf[SSAIOT_SC_GNSS_PAYLOAD_LEN];
 	unsigned int delay_ms = SSAIOT_SC_GNSS_IDLE_MS;
-	u8 rx_len_valid, status;
+	u8 data_len, status;
 	int ret;
 
 	/*
@@ -63,7 +63,7 @@ static void ssaiot_sc_gnss_poll(struct work_struct *work)
 	 */
 	ret = ssaiot_sc_xfer(gnss->sc, SSAIOT_SC_CMD_SENSOR_READ,
 			     SSAIOT_SC_SENSOR_GPS, NULL, 0,
-			     buf, sizeof(buf), &rx_len_valid, &status, NULL);
+			     buf, sizeof(buf), &data_len, &status, NULL);
 	if (!ret && status == SSAIOT_SC_STATUS_OK) {
 		size_t len;
 

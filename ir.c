@@ -77,13 +77,19 @@ struct ssaiot_sc_ir_priv {
 	int event_irq[SSAIOT_SC_IR_EV_MAX];
 };
 
-/* calculate record count from response size in bytes, after header */
-static inline int ssaiot_sc_ir_records(u8 len, size_t hdr_len, size_t rec_size)
+/*
+ * Calculate record count from the response's own length, after the header. The
+ * controller may answer with more than was read - a later firmware batching
+ * more records - so the count is capped at what the buffer holds; the rest is
+ * dropped when the next command goes out.
+ */
+static inline int ssaiot_sc_ir_records(u8 data_len, size_t rx_size,
+				       size_t hdr_len, size_t rec_size)
 {
-	if (len < hdr_len || (len - hdr_len) % rec_size)
+	if (data_len < hdr_len || (data_len - hdr_len) % rec_size)
 		return -EPROTO;
 
-	return (len - hdr_len) / rec_size;
+	return (min_t(size_t, data_len, rx_size) - hdr_len) / rec_size;
 }
 
 /*
@@ -111,14 +117,15 @@ static void ssaiot_sc_ir_poll(struct work_struct *work)
 	unsigned int delay_ms = SSAIOT_SC_IR_IDLE_MS;
 	struct ssaiot_sc_ir_resp resp;
 	s64 ts_ref;
-	u8 len;
+	u8 data_len;
 	int n, i;
 
 	n = ssaiot_sc_xfer(priv->sc, SSAIOT_SC_CMD_SENSOR_READ,
 			   SSAIOT_SC_SENSOR_IR, NULL, 0,
-			   (u8 *)&resp, sizeof(resp), &len, NULL, &ts_ref);
+			   (u8 *)&resp, sizeof(resp), &data_len, NULL, &ts_ref);
 	if (!n)
-		n = ssaiot_sc_ir_records(len, offsetof(typeof(resp), sample),
+		n = ssaiot_sc_ir_records(data_len, sizeof(resp),
+					 offsetof(typeof(resp), sample),
 					 sizeof(resp.sample[0]));
 
 	if (n < 0) {
