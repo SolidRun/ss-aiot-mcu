@@ -47,6 +47,14 @@ jobs:
             gcc-arm-none-eabi libnewlib-arm-none-eabi
           arm-none-eabi-gcc --version
 
+      # The IDE generates this from a pre-build step in .cproject; the raw
+      # compiler line below runs no pre-build steps, so do it here. The
+      # checkout is the working directory, so no -C is needed.
+      - name: Generate build id
+        run: |
+          git log -1 --abbrev=8 --pretty=format:%x23define%x20BUILD_ID%x200x%h%n > Core/Inc/build_id.h
+          git diff --quiet HEAD -- . ':!Core/Inc/build_id.h' || git log -1 --pretty=format:%x23define%x20BUILD_ID_DIRTY%x201%n >> Core/Inc/build_id.h
+
       # Core/ and Drivers/ are the two source folders the IDE builds
       # (<sourceEntries> in .cproject), so globbing them keeps CI in sync with
       # CubeMX code generation without a hand-maintained file list.
