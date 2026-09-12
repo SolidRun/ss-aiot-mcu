@@ -15,6 +15,16 @@
 /* controller cuts power after 1 second */
 #define SSAIOT_SC_POWEROFF_DELAY_MS	1000
 
+/* Response payload of CMD_SENSOR_READ / SENSOR_MCU_INFO. */
+struct ssaiot_sc_mcu_info {
+	u8 api_version;
+	u8 flags;
+	__le32 build_id; /* abbreviated commit, 0 when built without git */
+} __packed;
+
+/* mcu info flags */
+#define SSAIOT_SC_MCU_INFO_BUILD_DIRTY	BIT(0)
+
 static void ssaiot_sc_destroy_wq(void *data)
 {
 	destroy_workqueue(data);
@@ -51,7 +61,9 @@ static int ssaiot_sc_power_off(struct sys_off_data *data)
 
 static int ssaiot_sc_probe(struct i2c_client *client)
 {
+	struct ssaiot_sc_mcu_info info;
 	struct ssaiot_sc_priv *priv;
+	u8 data_len;
 	int ret;
 
 	priv = devm_kzalloc(&client->dev, sizeof(*priv), GFP_KERNEL);
@@ -60,6 +72,23 @@ static int ssaiot_sc_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, priv);
 	priv->dev = &client->dev;
+
+	/* identify the firmware first, it says what the rest may look like */
+	ret = ssaiot_sc_xfer(priv, SSAIOT_SC_CMD_SENSOR_READ,
+			     SSAIOT_SC_SENSOR_MCU_INFO, NULL, 0,
+			     (u8 *)&info, sizeof(info), &data_len, NULL, NULL);
+	if (ret)
+		return dev_err_probe(priv->dev, ret, "Failed to read mcu info.\n");
+	else if (data_len < sizeof(info)) {
+		return dev_err_probe(priv->dev, -EPROTO,
+				     "Controller reports %u bytes of mcu info, need %zu.\n",
+				     data_len, sizeof(info));
+	}
+	/* note data_len > sizeof(info) is not an error if firmware extended response */
+
+	dev_info(priv->dev, "controller api %u, firmware %08x%s.\n",
+		 info.api_version, le32_to_cpu(info.build_id),
+		 info.flags & SSAIOT_SC_MCU_INFO_BUILD_DIRTY ? "-dirty" : "");
 
 	priv->irq = fwnode_irq_get(dev_fwnode(priv->dev), 0);
 	if (priv->irq < 0)

@@ -38,6 +38,22 @@ claims any interrupt it needs with `platform_get_irq_byname()`. Adding a
 function means adding a cell to [`mfd.c`](mfd.c) and writing the driver; no
 change to the transport is required.
 
+At probe the core asks the controller to identify itself, so which firmware is
+running can be read back from the kernel log:
+
+```sh
+dmesg | grep solids
+```
+```
+[    7.337873] solidsense-aiot-system-controller 1-0018: controller api 0, firmware 5977093c.
+[    7.361491] solidsense-aiot-system-controller 1-0018: SolidSense AIOT System Controller probed.
+```
+
+`api` is the protocol version the firmware implements, and `firmware` the
+abbreviated commit it was built from, as in `git show 5977093c` in the firmware
+repository. A `-dirty` suffix means the tree carried uncommitted changes at
+build time, and `00000000` that the build had no git to ask.
+
 The below drivers are already implemented:
 
 ### GNSS

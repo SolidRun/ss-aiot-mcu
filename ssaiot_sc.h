@@ -37,6 +37,7 @@
 #define SSAIOT_SC_SENSOR_ALARM		0x08
 #define SSAIOT_SC_SENSOR_SOM		0x09
 #define SSAIOT_SC_SENSOR_ACCEL_TEMP	0x0a
+#define SSAIOT_SC_SENSOR_MCU_INFO	0x0b
 
 /* controller interrupt sources */
 enum ssaiot_sc_int_src {
