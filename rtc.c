@@ -22,12 +22,15 @@ struct ssaiot_sc_rtc_time {
 	u8 sec;
 } __packed;
 
-/* Payload of CMD_SENSOR_(CONFIG/READ) / SENSOR_ALARM, binary and 24 hour */
+/* Payload of CMD_SENSOR_(CONFIG/READ) / SENSOR_ALARM: flags, alarm time (binary) */
 struct ssaiot_sc_rtc_alarm {
+	u8 flags;
 	u8 hour;
 	u8 min;
 	u8 sec;
 } __packed;
+
+#define SSAIOT_SC_RTC_ALARM_ARMED	BIT(0)
 
 struct ssaiot_sc_rtc {
 	struct ssaiot_sc_priv *sc;
@@ -79,34 +82,21 @@ static int ssaiot_sc_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
-static int ssaiot_sc_rtc_alarm_cancel(struct ssaiot_sc_rtc *rtc)
+static int ssaiot_sc_rtc_alarm_write(struct ssaiot_sc_rtc *rtc,
+				     const struct ssaiot_sc_rtc_alarm *alarm)
 {
-	u8 status;
-	int ret;
-
-	/* cancelling is its own command, not a magic time */
-	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_OFF,
-			     SSAIOT_SC_SENSOR_ALARM, NULL, 0, NULL, 0,
-			     NULL, &status, NULL);
-	if (ret)
-		return ret;
-
-	return status == SSAIOT_SC_STATUS_OK ? 0 : -EIO;
-}
-
-static int ssaiot_sc_rtc_alarm_arm(struct ssaiot_sc_rtc *rtc,
-				   const struct ssaiot_sc_rtc_alarm *time)
-{
+	struct ssaiot_sc_rtc_alarm resp;
 	u8 status;
 	int ret;
 
 	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_CONFIG,
-			     SSAIOT_SC_SENSOR_ALARM, (const u8 *)time,
-			     sizeof(*time), NULL, 0, NULL, &status, NULL);
+			     SSAIOT_SC_SENSOR_ALARM, (const u8 *)alarm,
+			     sizeof(*alarm), (u8 *)&resp, sizeof(resp),
+			     NULL, &status, NULL);
 	if (ret)
 		return ret;
 
-	/* the controller range checks the fields and rejects the whole command */
+	/* the controller range checks the fields and keeps what it had */
 	if (status != SSAIOT_SC_STATUS_OK)
 		return -EINVAL;
 
@@ -120,16 +110,16 @@ static int ssaiot_sc_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	time64_t now_secs, alarm_secs;
 	struct ssaiot_sc_rtc_alarm resp;
 	struct rtc_time now;
-	u8 status;
 	int ret;
 
-	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_READ,
+	/* an empty payload reads the configuration */
+	ret = ssaiot_sc_xfer(rtc->sc, SSAIOT_SC_CMD_SENSOR_CONFIG,
 			     SSAIOT_SC_SENSOR_ALARM, NULL, 0,
-			     (u8 *)&resp, sizeof(resp), NULL, &status, NULL);
+			     (u8 *)&resp, sizeof(resp), NULL, NULL, NULL);
 	if (ret)
 		return ret;
 
-	if (status != SSAIOT_SC_STATUS_OK) {
+	if (!(resp.flags & SSAIOT_SC_RTC_ALARM_ARMED)) {
 		/* no active alarm */
 		alrm->enabled = 0;
 		return 0;
@@ -161,7 +151,7 @@ static int ssaiot_sc_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	/* convert to rtc_time */
 	rtc_time64_to_tm(alarm_secs, &alrm->time);
 
-	/* alarms are always armed */
+	/* the armed flag got us here */
 	alrm->enabled = 1;
 
 	return 0;
@@ -170,25 +160,28 @@ static int ssaiot_sc_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 static int ssaiot_sc_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
-	struct ssaiot_sc_rtc_alarm time;
+	struct ssaiot_sc_rtc_alarm alarm;
 
-	time.hour = alrm->time.tm_hour;
-	time.min = alrm->time.tm_min;
-	time.sec = alrm->time.tm_sec;
+	alarm.flags = SSAIOT_SC_RTC_ALARM_ARMED;
+	alarm.hour = alrm->time.tm_hour;
+	alarm.min = alrm->time.tm_min;
+	alarm.sec = alrm->time.tm_sec;
 
-	return ssaiot_sc_rtc_alarm_arm(rtc, &time);
+	return ssaiot_sc_rtc_alarm_write(rtc, &alarm);
 }
 
 static int ssaiot_sc_rtc_alarm_irq_enable(struct device *dev,
 					  unsigned int enabled)
 {
 	struct ssaiot_sc_rtc *rtc = dev_get_drvdata(dev);
+	struct ssaiot_sc_rtc_alarm alarm = { };
 
 	if (enabled)
 		/* set_alarm already armed interrupt, nothing left to do */
 		return 0;
 
-	return ssaiot_sc_rtc_alarm_cancel(rtc);
+	/* clearing the armed flag cancels, the time that follows is ignored */
+	return ssaiot_sc_rtc_alarm_write(rtc, &alarm);
 }
 
 /*
