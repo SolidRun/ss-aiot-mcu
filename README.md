@@ -1082,3 +1082,13 @@ and builds with no git at all. A checkout still holds the placeholder, and git
 is read instead. **A tree that is neither fails the build** rather than
 producing firmware that cannot be traced back to a commit, so releasing the
 sources needs no extra step: any archive carries its own build id.
+
+## Software Bill of Materials (SBOM)
+
+Due to the lack of mature dependency management tooling for C/C++, this project uses a hand-crafted [SBOM file](sbom_cdx.json). This file must be manually updated by project maintainers whenever third-party libraries are added or upgraded.
+
+This project uses the [STM32CubeMX](https://www.st.com/en/development-tools/stm32cubemx.html) code generator to supply HAL drivers. For simplicity, the entire [STM32CubeU0 package](https://github.com/STMicroelectronics/STM32CubeU0) is declared in the SBOM, even though only a subset (the HAL layers and CMSIS) is actually compiled. Consequently, the SBOM reflects the broader source-tree footprint rather than a strict binary analysis, meaning it includes licenses for ST middleware that are not present in the compiled firmware.
+
+**The SBOM does not describe the compiled binary.** Being source-level, it tracks third-party source dependencies only, and omits the compiler runtimes the ARM GCC toolchain links in statically: `newlib` and `libgcc`. The latter is `GPL-3.0-or-later WITH GCC-exception-3.1`, the only GPL-family code in the firmware.
+
+The current list of ST licenses was extracted from the vendor's official SBOM using `jq '[.components[]?.licenses[]?] | unique' STM32Cube_FW_U0_V1.3.0/sbom_cdx.json`, and must be re-examined when upgrading the ST package.

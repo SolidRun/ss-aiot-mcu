@@ -1,0 +1,177 @@
+{
+	"bomFormat": "CycloneDX",
+	"specVersion": "1.6",
+	"version": 1,
+	"metadata": {
+		"timestamp": "$Format:%cI$",
+		"tools": {
+			"components": [
+				{
+					"bom-ref": "github-actions",
+					"type": "application",
+					"name": "GitHub Actions",
+					"publisher": "GitHub"
+				}
+			]
+		},
+		"authors": [
+			{
+				"name": "SolidRun Ltd.",
+				"email": "support@solid-run.com"
+			}
+		],
+		"component": {
+			"bom-ref": "ss-aiot-mcu",
+			"type": "application",
+			"name": "ss-aiot-mcu",
+			"version": "$Format:%H$",
+			"description": "Reference System Controller Firmware for SolidSense AIoT Board",
+			"publisher": "SolidRun Ltd.",
+			"purl": "pkg:github/SolidRun/ss-aiot-mcu@$Format:%H$",
+			"licenses": [
+				{
+					"license": {
+						"id": "BSD-3-Clause"
+					}
+				}
+			]
+		}
+	},
+	"components": [
+		{
+			"bom-ref": "embedded-resources-circular-buffer",
+			"type": "library",
+			"name": "embedded-resources-circular-buffer",
+			"version": "00c1125f1bc3e1369c5022c54dd58eda40834d39",
+			"description": "Circular buffer from Embedded Artistry's embedded-resources",
+			"publisher": "Embedded Artistry LLC",
+			"purl": "pkg:github/embeddedartistry/embedded-resources@00c1125f1bc3e1369c5022c54dd58eda40834d39",
+			"licenses": [
+				{
+					"license": {
+						"id": "CC0-1.0"
+					}
+				}
+			],
+			"externalReferences": [
+				{
+					"type": "source-distribution",
+					"url": "https://github.com/embeddedartistry/embedded-resources/blob/00c1125f1bc3e1369c5022c54dd58eda40834d39/examples/c/circular_buffer/circular_buffer.h"
+				},
+				{
+					"type": "source-distribution",
+					"url": "https://github.com/embeddedartistry/embedded-resources/blob/00c1125f1bc3e1369c5022c54dd58eda40834d39/examples/c/circular_buffer/circular_buffer_no_modulo.c"
+				}
+			]
+		},
+		{
+			"bom-ref": "sths34pf80-pid",
+			"type": "library",
+			"name": "sths34pf80-pid",
+			"version": "3.1.0",
+			"description": "STHS34PF80 platform-independent register driver, the standard C driver for the infrared presence and motion sensor",
+			"publisher": "STMicroelectronics NV",
+			"purl": "pkg:github/STMicroelectronics/sths34pf80-pid@v3.1.0",
+			"licenses": [
+				{
+					"license": {
+						"id": "BSD-3-Clause"
+					}
+				}
+			],
+			"externalReferences": [
+				{
+					"type": "vcs",
+					"url": "https://github.com/STMicroelectronics/sths34pf80-pid.git"
+				},
+				{
+					"type": "source-distribution",
+					"url": "https://github.com/STMicroelectronics/sths34pf80-pid/archive/86070699e53b7f28758c0ef3b033a512b74e450d.tar.gz"
+				}
+			]
+		},
+		{
+			"bom-ref": "stm32-ism330dhcx",
+			"type": "library",
+			"name": "stm32-ism330dhcx",
+			"version": "1.6.0",
+			"description": "ISM330DHCX BSP MEMS component driver for STM32Cube, with the platform-independent register driver it builds on",
+			"publisher": "STMicroelectronics NV",
+			"purl": "pkg:github/STMicroelectronics/stm32-ism330dhcx@v1.6.0",
+			"licenses": [
+				{
+					"license": {
+						"id": "BSD-3-Clause"
+					}
+				}
+			],
+			"externalReferences": [
+				{
+					"type": "vcs",
+					"url": "https://github.com/STMicroelectronics/stm32-ism330dhcx.git"
+				},
+				{
+					"type": "source-distribution",
+					"url": "https://github.com/STMicroelectronics/stm32-ism330dhcx/archive/5a29c90eb143979b784176661fbdddba2750416f.tar.gz"
+				}
+			]
+		},
+		{
+			"bom-ref": "stm32cubeu0",
+			"type": "library",
+			"name": "STM32CubeU0",
+			"version": "1.3.0",
+			"description": "STM32Cube MCU Full Package for the STM32U0 series - the HAL and LL drivers, the CMSIS device files for STM32U0, and Arm's CMSIS Core. Its constituent components are enumerated in the package's own SBoM, linked from this component's bom external reference",
+			"publisher": "STMicroelectronics NV",
+			"purl": "pkg:github/STMicroelectronics/STM32CubeU0@v1.3.0",
+			"licenses": [
+				{
+					"license": {
+						"id": "Apache-2.0"
+					}
+				},
+				{
+					"license": {
+						"id": "BSD-3-Clause"
+					}
+				},
+				{
+					"license": {
+						"name": "LIMITED LICENSE AGREEMENT FOR ST MATERIALS EVALUATION (SLA0078)"
+					}
+				},
+				{
+					"license": {
+						"name": "MICROSOFT SOFTWARE LICENSE"
+					}
+				},
+				{
+					"license": {
+						"name": "Ultimate Liberty license (SLA0044)"
+					}
+				}
+			],
+			"externalReferences": [
+				{
+					"type": "source-distribution",
+					"url": "https://sw-center.st.com/packs/resource/firmware/stm32cube_fw_u0_v130.zip"
+				},
+				{
+					"type": "bom",
+					"url": "https://raw.githubusercontent.com/STMicroelectronics/STM32CubeU0/v1.3.0/sbom_cdx.json"
+				}
+			]
+		}
+	],
+	"dependencies": [
+		{
+			"ref": "ss-aiot-mcu",
+			"dependsOn": [
+				"embedded-resources-circular-buffer",
+				"sths34pf80-pid",
+				"stm32-ism330dhcx",
+				"stm32cubeu0"
+			]
+		}
+	]
+}

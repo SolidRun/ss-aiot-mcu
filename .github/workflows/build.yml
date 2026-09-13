@@ -65,6 +65,29 @@ jobs:
           headless-build.sh -data /tmp/ws -import . -build ${{ env.TARGET }}/Debug
           headless-build.sh -data /tmp/ws -import . -build ${{ env.TARGET }}/Release
 
+      - name: Generate SBoM
+        run: |
+          # Regenerating in place modifies a tracked file, which tools/build_id.sh
+          # would report as a dirty tree. This is intentional as the sbom file
+          # includes format placeholders. Hide the file from workspace.
+          git update-index --skip-worktree sbom_cdx.json
+          # update placeholders and missing fields in hand-written SBoM:
+          # - git hash (added by git archive automatically)
+          # - timestamp (added by git archive automatically, updated from CI)
+          # - serial number (uuid, only added from CI)
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          SERIAL="urn:uuid:$(cat /proc/sys/kernel/random/uuid)"
+          jq --arg ts "$TIMESTAMP" \
+             --arg serial "$SERIAL" \
+             --arg sha "${{ github.sha }}" \
+             '.serialNumber = $serial |
+              .metadata.timestamp = $ts |
+              .metadata.component.version = $sha |
+              .metadata.component.purl = "pkg:github/SolidRun/ss-aiot-mcu@\($sha)"' \
+              sbom_cdx.json > sbom_cdx.json.gen
+              mv sbom_cdx.json.gen sbom_cdx.json
+          # TODO: consider dynamic generation by code scanning
+
       - name: Generate Bundle
         id: bundle
         env:
@@ -72,6 +95,7 @@ jobs:
             Debug/*.elf Debug/*.hex Debug/*.bin Debug/*.map
             Release/*.elf Release/*.hex Release/*.bin Release/*.map
             LICENSE.txt THIRD-PARTY-NOTICES.txt
+            sbom_cdx.json
         run: |
           BUNDLE=${{ env.TARGET }}-${{ steps.rev.outputs.version }}
           mkdir -p "$BUNDLE"
@@ -95,4 +119,5 @@ jobs:
         with:
           files: |
             ${{ steps.bundle.outputs.bundle }}
+            sbom_cdx.json
           fail_on_unmatched_files: true
