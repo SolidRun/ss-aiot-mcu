@@ -2,3 +2,7 @@
 
 # substituted with the commit when packaged by git archive, see tools/build_id.sh
 .version export-subst
+
+# substituted with the commit when packaged by git archive, so that a source
+# export carries an SBoM that identifies it
+sbom_cdx.json export-subst

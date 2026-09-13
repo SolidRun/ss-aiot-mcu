@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # For sbom generation: bear, jq. For packaging build artifacts: zip.
 RUN set -e; \
         apt-get update; \
-        apt-get install -y --no-install-recommends bear ca-certificates git libusb-1.0-0 libgtk-3-0 libncurses5 libwebkit2gtk-4.0-37 locales unzip zip; \
+        apt-get install -y --no-install-recommends bear ca-certificates git jq libusb-1.0-0 libgtk-3-0 libncurses5 libwebkit2gtk-4.0-37 locales unzip zip; \
         rm -rf /var/lib/apt/lists/*; \
         :
 
