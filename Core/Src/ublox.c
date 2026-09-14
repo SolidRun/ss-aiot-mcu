@@ -48,56 +48,80 @@ volatile uint32_t ublox_filler_total;  /* 0xFF idle bytes discarded    */
 volatile uint16_t ublox_last_real;     /* real bytes in the last pump  */
 volatile uint32_t ublox_err_count;     /* failed I2C3 transfers        */
 volatile uint32_t ublox_resets;        /* I2C3 recoveries performed    */
+volatile uint32_t ublox_reset_errors;  /* recoveries that failed       */
 
-/* Consecutive failures before the bus is assumed stuck rather than glitching.
+/* Shortest gap between two recoveries, in ms.
  *
- * One failed block is unremarkable and costs nothing but that block. Several in
- * a row means the peripheral is not going to come back on its own: HAL's
- * timeout path abandons a transfer without resetting CR2 or generating a STOP,
- * so a transfer cut short leaves BUSY asserted and every later one fails the
- * same way, permanently. Nothing else on this bus can recover it - I2C3 carries
- * only the GNSS, so there is no other master and no slave state machine to
- * re-arm. */
-#define UBLOX_ERR_BEFORE_RESET  3U
+ * If a reset did not take, repeating it at the pump's own cadence would spend
+ * the main loop on recoveries and nothing else. */
+#define UBLOX_RESET_BACKOFF_MS  200U
 
 /* Recover a stuck I2C3.
  *
- * DeInit/Init both clear PE, which is this peripheral's documented software
- * reset: it returns the state machine and status bits to their reset values and
- * releases SCL and SDA. That covers the MCU holding the bus. It cannot help if
- * the module itself is holding a line down. */
+ * Clearing PE is this peripheral's documented software reset: it returns the
+ * state machine and status bits to their reset values and releases SCL and SDA.
+ * That covers the MCU holding the bus. It cannot help if the module itself is
+ * holding a line down.
+ *
+ * Not MX_I2C3_Init(), because all three of its failure paths end in
+ * Error_Handler(), which disables interrupts and loops forever. A glitch on the
+ * GNSS bus must not be able to stop the controller; the SOM would read that as
+ * a dead MCU. Re-init here and count a failure instead, to be retried on the
+ * next block.
+ *
+ * hi2c3.Init survives HAL_I2C_DeInit(), so only the two filters need setting
+ * again. They are what MX_I2C3_Init() configures beyond HAL_I2C_Init(). */
 static void UBlox_ResetBus(void)
 {
-    HAL_I2C_DeInit(&hi2c3);
-    MX_I2C3_Init();
     ublox_resets++;
+
+    if ((HAL_I2C_DeInit(&hi2c3) != HAL_OK) ||
+        (HAL_I2C_Init(&hi2c3) != HAL_OK) ||
+        (HAL_I2CEx_ConfigAnalogFilter(&hi2c3, I2C_ANALOGFILTER_ENABLE) != HAL_OK) ||
+        (HAL_I2CEx_ConfigDigitalFilter(&hi2c3, 0) != HAL_OK)) {
+        ublox_reset_errors++;
+    }
 }
 
 /* Read one block of stream. Returns false on I2C error. */
 static bool UBlox_ReadBlock(uint8_t *buf)
 {
-    static uint8_t consecutive_errors;
+    static uint32_t last_reset;
+    static bool     reset_since_ok;
 
     if (HAL_I2C_Master_Receive(&hi2c3, UBLOX_ADDR, buf, UBLOX_CHUNK,
-                               UBLOX_I2C_TIMEOUT) != HAL_OK) {
-        ublox_err_count++;
-
-        if (consecutive_errors < UBLOX_ERR_BEFORE_RESET) {
-            consecutive_errors++;
-        }
-
-        if (consecutive_errors >= UBLOX_ERR_BEFORE_RESET) {
-            /* Left saturated, so every further failed block retries the
-             * recovery rather than needing the counter to climb again. */
-            UBlox_ResetBus();
-        }
-
-        return false;
+                               UBLOX_I2C_TIMEOUT) == HAL_OK) {
+        reset_since_ok = false;
+        return true;
     }
 
-    consecutive_errors = 0;
+    ublox_err_count++;
 
-    return true;
+    /* What failed decides whether a recovery is needed. HAL clears ErrorCode at
+     * the start of every transfer, so this describes this block only.
+     *
+     * AF means the module did not acknowledge: asleep, busy, or absent. HAL's
+     * NACK path already sends a STOP and clears CR2, so the peripheral is clean
+     * and the next block can just try again.
+     *
+     * TIMEOUT is the one that leaves damage. HAL abandons the transfer without
+     * a STOP and without clearing CR2, so BUSY stays asserted and every later
+     * transfer fails the same way, permanently. BERR and ARLO leave the bus
+     * undefined as well. Only these three are worth a reset. */
+    if ((hi2c3.ErrorCode & (HAL_I2C_ERROR_TIMEOUT |
+                            HAL_I2C_ERROR_BERR |
+                            HAL_I2C_ERROR_ARLO)) == 0U)
+        return false;
+
+    /* Unsigned difference, so the tick wrap at 49.7 days is safe. */
+    if (reset_since_ok && ((HAL_GetTick() - last_reset) < UBLOX_RESET_BACKOFF_MS))
+        return false;
+
+    last_reset     = HAL_GetTick();
+    reset_since_ok = true;
+    UBlox_ResetBus();
+
+    return false;
 }
 
 void UBlox_Init(void)
@@ -111,6 +135,7 @@ void UBlox_Init(void)
     ublox_last_real    = 0;
     ublox_err_count    = 0;
     ublox_resets       = 0;
+    ublox_reset_errors = 0;
 
     NMEA_Reset();
 
