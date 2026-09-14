@@ -1043,3 +1043,26 @@ Current firmware behaviour the master side should be aware of.
 - **An IR event is reported before its sample is in RAM.** The same holds for
   the infrared sensor on its 1 s main-loop cadence, so a `Read IR data` that
   arrives first returns samples up to a second older than the event.
+
+## Compile Project
+
+### IDE
+
+This project is developed using the [STM32CubeIDE](https://www.st.com/en/development-tools/stm32cubeide.html) development environment.
+Git clone to a location of choice and import the project from cubeide.
+
+It comes preconfigured with release and debug build configurations, and generates AIOT.hex file for programming.
+
+### Headless
+
+This project is developed using the [STM32CubeIDE](https://www.st.com/en/development-tools/stm32cubeide.html) development environment.
+
+Headless builds are supported but still require installing the full IDE.
+This can be simplified under [docker](https://www.docker.com/) (or [podman](https://podman.io/)):
+
+```sh
+# first time only, generate toolchain container image
+docker build -t ssaiotmcu_build --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) docker
+# build firmware
+docker run --rm --userns=keep-id -it -v $PWD:/work --entrypoint /opt/stm32cubeide/headless-build.sh ssaiotmcu_build -data /tmp/ws -import . -build AIOT/Release
+```

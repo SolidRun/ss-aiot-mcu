@@ -9,77 +9,57 @@ on:
   workflow_dispatch:
 
 jobs:
+  prepare:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    outputs:
+      uid: ${{ steps.uid_step.outputs.userid }}
+      gid: ${{ steps.uid_step.outputs.groupid }}
+    steps:
+      - name: Get User/Group ID
+        id: uid_step
+        run: |
+          echo "userid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "groupid=$(id -g)" >> "$GITHUB_OUTPUT"
+
   firmware:
     name: STM32U031C8Ux firmware
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
+    runs-on: self-hosted
+    needs:
+      - prepare
+    timeout-minutes: 10
+    container:
+      image: ciserver.ci:5000/${{ github.repository_id }}:stm32cubeide-1.19.0_25607_20250703_0907_amd64
+      credentials:
+          username: ${{ secrets.CI_CACHE_REGISTRY_LOGIN }}
+          password: ${{ secrets.CI_CACHE_REGISTRY_PASSWORD }}
+      options: --user "${{ needs.prepare.outputs.uid }}:${{ needs.prepare.outputs.gid }}"
     env:
       TARGET: AIOT
-      LDSCRIPT: STM32U031C8UX_FLASH.ld
-      # Mirrors the STM32CubeIDE "Release" configuration (.cproject), except
-      # that debug info is kept so the archived .elf stays debuggable. Debug
-      # info lives outside the loadable sections, so the .hex/.bin are
-      # unaffected by it.
-      MCUFLAGS: -mcpu=cortex-m0plus -mthumb -mfloat-abi=soft
-      DEFINES: -DUSE_HAL_DRIVER -DSTM32U031xx
-      INCLUDES: >-
-        -ICore/Inc
-        -IDrivers/STM32U0xx_HAL_Driver/Inc
-        -IDrivers/STM32U0xx_HAL_Driver/Inc/Legacy
-        -IDrivers/CMSIS/Device/ST/STM32U0xx/Include
-        -IDrivers/CMSIS/Include
-      CFLAGS: -std=gnu11 -Os -g3 -Wall -ffunction-sections -fdata-sections
-      LDFLAGS: >-
-        --specs=nano.specs --specs=nosys.specs -static
-        -Wl,--gc-sections -Wl,--print-memory-usage
-
     steps:
       - uses: actions/checkout@v5
 
-      # ubuntu-latest (24.04) ships Arm GNU Toolchain 13.2.Rel1, i.e. the same
-      # upstream release STM32CubeIDE bundles. libnewlib provides nano.specs /
-      # nosys.specs.
-      - name: Install arm-none-eabi toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-arm-none-eabi libnewlib-arm-none-eabi
-          arm-none-eabi-gcc --version
+      # --short=8 matches --abbrev=8 in the build_id.h generator, so the
+      # artifact name carries the same BUILD_ID the firmware reports.
+      - name: Short commit hash
+        id: rev
+        run: echo "short=$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
 
-      # The IDE generates this from a pre-build step in .cproject; the raw
-      # compiler line below runs no pre-build steps, so do it here. The
-      # checkout is the working directory, so no -C is needed.
-      - name: Generate build id
+      # Headless CDT build of the Release configuration, the same one the IDE
+      # builds. It runs the .cproject pre-build step, so build_id.h is
+      # generated inside the container from the mounted checkout, which is
+      # where ${ProjDirPath} resolves to. The .hex and .bin come from the
+      # configuration's output converters, and it prints the size itself.
+      - name: Compile, Link, Generate hex and bin
         run: |
-          git log -1 --abbrev=8 --pretty=format:%x23define%x20BUILD_ID%x200x%h%n > Core/Inc/build_id.h
-          git diff --quiet HEAD -- . ':!Core/Inc/build_id.h' || git log -1 --pretty=format:%x23define%x20BUILD_ID_DIRTY%x201%n >> Core/Inc/build_id.h
-
-      # Core/ and Drivers/ are the two source folders the IDE builds
-      # (<sourceEntries> in .cproject), so globbing them keeps CI in sync with
-      # CubeMX code generation without a hand-maintained file list.
-      - name: Compile and link
-        run: |
-          mkdir -p build
-          arm-none-eabi-gcc \
-            $MCUFLAGS $CFLAGS $DEFINES $INCLUDES $LDFLAGS \
-            -T "$LDSCRIPT" -Wl,-Map=build/$TARGET.map \
-            -x assembler-with-cpp Core/Startup/*.s -x none \
-            $(find Core/Src Drivers -name '*.c' | sort) \
-            -lc -lm -o "build/$TARGET.elf"
-
-      - name: Generate hex and bin
-        run: |
-          arm-none-eabi-objcopy -O ihex   "build/$TARGET.elf" "build/$TARGET.hex"
-          arm-none-eabi-objcopy -O binary "build/$TARGET.elf" "build/$TARGET.bin"
-          arm-none-eabi-size "build/$TARGET.elf"
+          headless-build.sh -data /tmp/ws -import . -build ${{ env.TARGET }}/Release
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-firmware
+          name: ${{ env.TARGET }}-firmware-${{ steps.rev.outputs.short }}
           path: |
-            build/*.elf
-            build/*.hex
-            build/*.bin
-            build/*.map
+            Release/*.elf
+            Release/*.hex
+            Release/*.bin
+            Release/*.map
           if-no-files-found: error

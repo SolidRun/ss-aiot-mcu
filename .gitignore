@@ -6,3 +6,6 @@ Release/
 *.map
 *.list
 *.su
+
+# STM32CubeIDE installer, fetched into the docker build context by CI
+/docker/*.sh.zip

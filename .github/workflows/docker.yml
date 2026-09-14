@@ -1,0 +1,67 @@
+name: docker-stm32cubeide
+
+on:
+  # Manual only build of stm32cubeide container
+  # (rebuild per CI run too expensive)
+  workflow_dispatch:
+    inputs:
+      cubeide_version:
+        description: 'STM32CubeIDE version, as in st-stm32cubeide_<version>.sh.zip'
+        required: true
+        default: '1.19.0_25607_20250703_0907_amd64'
+        type: string
+
+jobs:
+  container:
+    name: build and push image
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      # ST offers no anonymous download, so the installer comes from the
+      # protected bucket into the docker build context.
+      - name: Fetch STM32CubeIDE installer
+        shell: bash -e {0}
+        env:
+          ACCESS_KEY: ${{ secrets.PROTECTED_S3_ACCESS }}
+          SECRET_KEY: ${{ secrets.PROTECTED_S3_SECRET }}
+          HOST: ${{ secrets.IMAGES_S3_HOST }}
+          BUCKET: ${{ secrets.PROTECTED_S3_BUCKET }}
+        run: |
+          sudo apt-get -y install s3cmd
+          cd docker
+          s3cmd --access_key="$ACCESS_KEY" --secret_key="$SECRET_KEY" --host="$HOST" --host-bucket="%(bucket)s.$HOST" get s3://$BUCKET/stmicro/st-stm32cubeide_${{ inputs.cubeide_version }}.sh.zip
+
+      - name: Get User/Group ID
+        id: uid_step
+        run: |
+          echo "userid=$(id -u)" >> "$GITHUB_OUTPUT"
+          echo "groupid=$(id -g)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          buildkitd-config: /etc/docker/cibuilder.toml
+
+      - name: Login to Docker Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ciserver.ci:5000
+          username: ${{ secrets.CI_CACHE_REGISTRY_LOGIN }}
+          password: ${{ secrets.CI_CACHE_REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: docker
+          push: true
+          tags: ciserver.ci:5000/${{ github.repository_id }}:stm32cubeide-${{ inputs.cubeide_version }}
+          build-args: |
+            USER_ID=${{ steps.uid_step.outputs.userid }}
+            GROUP_ID=${{ steps.uid_step.outputs.groupid }}
+            CUBEIDE_VERSION_FULL=${{ inputs.cubeide_version }}
+
+      - name: Report image
+        run: |
+          echo "Pushed \`ciserver.ci:5000/${{ github.repository_id }}:stm32cubeide-${{ inputs.cubeide_version }}\`" >> "$GITHUB_STEP_SUMMARY"
