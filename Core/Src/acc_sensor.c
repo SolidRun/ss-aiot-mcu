@@ -105,15 +105,30 @@ static uint8_t acc_motionsample_cbuf_stor[ACC_MOTIONSAMPLE_BUF_SIZE * sizeof(acc
 static acc_tempsample_t acc_tempsample;
 static bool acc_tempsample_valid;
 
-/* Append one sample to the buffer, discards oldest when full. */
+/* Append one sample to the buffer, discards oldest when full.
+ *
+ * Masked throughout. The buffer holds bytes, so one sample is ten separate
+ * circular_buf_put() calls, and once the ring is full each of them moves the
+ * tail as well. The reader is I2C_Slave_Process(), which runs in the I2C2
+ * interrupt. If it lands between two of those calls it pops ten bytes across a
+ * record boundary, and every sample after that stays misaligned. The queue in
+ * nmea.c masks for the same reason.
+ *
+ * Only this side needs the mask, since main cannot preempt an interrupt. Ten
+ * puts is a few microseconds, well inside one 100kHz I2C2 byte. */
 static void ACC_MotionSamplePush(const acc_motionsample_t *sample)
 {
     /* cast to byte array */
     const uint8_t *raw = (const uint8_t *)sample;
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
 
     /* append to buffer */
     for (size_t i = 0; i < sizeof(*sample); i++)
         circular_buf_put(acc_motionsample_cbuf, raw[i]);
+
+    __set_PRIMASK(primask);
 }
 
 /* Take one complete sample from the buffer if available. */
@@ -131,6 +146,22 @@ static bool ACC_MotionSamplePop(acc_motionsample_t *out)
         (void)circular_buf_get(acc_motionsample_cbuf, &raw[i]);
 
     return true;
+}
+
+/* Replace the cached die temperature sample. Masked for the same reason as
+ * ACC_MotionSamplePush(): three separate stores that the I2C2 interrupt reads
+ * back as one record. */
+static void ACC_TempSampleStore(uint32_t timestamp, int16_t temp)
+{
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+
+    acc_tempsample.timestamp = timestamp;
+    acc_tempsample.temp = temp;
+    acc_tempsample_valid = true;
+
+    __set_PRIMASK(primask);
 }
 
 /* Current sample timestamp counter - see the header */
@@ -499,9 +530,7 @@ static int ACC_DrainFifo(uint16_t max_entries)
             stamp += (uint32_t)acc_ts_offset * ACC_TS_LSB_PER_SAMPLE;
             stamp = ACC_DeviceToMcu(stamp);
 
-            acc_tempsample.temp = (int16_t)(((uint16_t)raw[1] << 8) | raw[0]);
-            acc_tempsample.timestamp = stamp;
-            acc_tempsample_valid = true;
+            ACC_TempSampleStore(stamp, (int16_t)(((uint16_t)raw[1] << 8) | raw[0]));
 
             /* a temperature reading shares a sample slot rather than adding one, don't increment acc_ts_offset */
             break;

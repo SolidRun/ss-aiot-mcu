@@ -153,15 +153,23 @@ int IR_SENSOR_ReadTAmbShock(int16_t *value)
     return sths34pf80_tamb_shock_raw_get(&ir_sensor_ctx, value);
 }
 
-/* Append one sample to the buffer, discards oldest when full. */
+/* Append one sample to the buffer, discards oldest when full.
+ *
+ * Masked for the same reason as the accelerometer's push. See
+ * ACC_MotionSamplePush() in acc_sensor.c. */
 static void IR_SamplePush(const ir_sample_t *sample)
 {
     /* cast to byte array */
     const uint8_t *raw = (const uint8_t *)sample;
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
 
     /* append to buffer */
     for (size_t i = 0; i < sizeof(*sample); i++)
         circular_buf_put(ir_sample_cbuf, raw[i]);
+
+    __set_PRIMASK(primask);
 }
 
 /* Take one complete sample from the buffer if available. */
