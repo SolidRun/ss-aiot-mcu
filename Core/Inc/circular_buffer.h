@@ -1,7 +1,8 @@
 /*
  * Circular buffer from Embedded Artistry's embedded-resources.
  *
- * Licensed CC0 1.0 Universal (public domain dedication).
+ * SPDX-License-Identifier: CC0-1.0
+ * SPDX-FileCopyrightText: Embedded Artistry LLC
  *
  * Imported on 05/09/2026 from git hash 00c1125f1.
  * Link: https://github.com/embeddedartistry/embedded-resources/blob/00c1125f1bc3e1369c5022c54dd58eda40834d39/examples/c/circular_buffer/circular_buffer.h
