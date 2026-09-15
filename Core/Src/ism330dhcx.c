@@ -1,3 +1,13 @@
+/*
+ * ISM330DHCX BSP component driver from STMicroelectronics' stm32-ism330dhcx.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-FileCopyrightText: STMicroelectronics
+ *
+ * Imported on 16/11/2025 from git hash 5a29c90eb (v1.6.0).
+ * Link: https://github.com/STMicroelectronics/stm32-ism330dhcx/blob/5a29c90eb143979b784176661fbdddba2750416f/ism330dhcx.c
+ */
+
 /**
   ******************************************************************************
   * @file    ism330dhcx.c
