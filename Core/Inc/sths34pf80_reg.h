@@ -1,3 +1,13 @@
+/*
+ * STHS34PF80 register driver from STMicroelectronics' sths34pf80-pid.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-FileCopyrightText: STMicroelectronics
+ *
+ * Imported on 16/11/2025 from git hash 86070699e (v3.1.0).
+ * Link: https://github.com/STMicroelectronics/sths34pf80-pid/blob/86070699e53b7f28758c0ef3b033a512b74e450d/sths34pf80_reg.h
+ */
+
 /**
   ******************************************************************************
   * @file    sths34pf80_reg.h

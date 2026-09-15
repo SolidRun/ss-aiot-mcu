@@ -14,6 +14,7 @@ Contents
   2. STM32CubeU0 HAL and LL Drivers  ........................ BSD-3-Clause
   3. ARM CMSIS Core and Device Files  ....................... Apache-2.0
   4. STMicroelectronics ISM330DHCX driver  .................. BSD-3-Clause
+  5. STMicroelectronics STHS34PF80 driver  .................. BSD-3-Clause
 
 
 ================================================================================
@@ -470,6 +471,28 @@ Files in this distribution, taken from the repository root:
   Core/Src/ism330dhcx_reg.c
 
 All four carry SPDX-License-Identifier: BSD-3-Clause and
+SPDX-FileCopyrightText: STMicroelectronics.
+
+The license is the BSD 3-Clause "New" or "Revised" License, whose text is
+reproduced in section 2 above. It applies here with the copyright notice given
+above in place of the one printed there.
+
+================================================================================
+5. STMicroelectronics STHS34PF80 driver
+================================================================================
+
+Component   : STHS34PF80 platform independent register driver
+Origin      : https://github.com/STMicroelectronics/sths34pf80-pid
+Version     : v3.1.0 (commit 86070699e53b7f28758c0ef3b033a512b74e450d)
+Copyright   : Copyright (c) 2022, STMicroelectronics. All rights reserved.
+License     : BSD-3-Clause
+
+Files in this distribution, taken from the repository root:
+
+  Core/Inc/sths34pf80_reg.h
+  Core/Src/sths34pf80_reg.c
+
+Both carry SPDX-License-Identifier: BSD-3-Clause and
 SPDX-FileCopyrightText: STMicroelectronics.
 
 The license is the BSD 3-Clause "New" or "Revised" License, whose text is
