@@ -1,1 +1,4 @@
 * text=auto eol=lf
+
+# substituted with the commit when packaged by git archive, see tools/build_id.sh
+.version export-subst

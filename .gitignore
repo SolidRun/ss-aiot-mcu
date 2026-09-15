@@ -7,5 +7,12 @@ Release/
 *.list
 *.su
 
+# written by the pre-build step, tools/build_id.sh
+/Core/Inc/build_id.h
+
 # STM32CubeIDE installer, fetched into the docker build context by CI
 /docker/*.sh.zip
+
+# noisy cubeide settings without functional impact
+/.settings/language.settings.xml
+/.settings/com.st.stm32cube.ide.mcu.sfrview.prefs

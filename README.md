@@ -267,9 +267,10 @@ Notes on individual commands:
 
   `BUILD_ID` is little-endian like every other multi-byte field, so its
   hexadecimal form read back as a number is the abbreviated hash: `git log` at
-  `8636a822` arrives as `22 a8 36 86`. It is `0` when the firmware was built
-  without git, from an export for instance, which is also when `FLAGS` cannot
-  say anything about the tree.
+  `8636a822` arrives as `22 a8 36 86`. It is never `0` — the build fails
+  instead of emitting an untraceable image, see [Build ID](#build-id) — so a
+  master that reads `0` is talking to firmware that this project's build system
+  did not produce, and `FLAGS` cannot be trusted either.
 
   `STATUS` is always `0x00`.
 - **Read IR config** is a placeholder. There is no configuration to report, and
@@ -1066,3 +1067,18 @@ docker build -t ssaiotmcu_build --build-arg USER_ID=$(id -u) --build-arg GROUP_I
 # build firmware
 docker run --rm --userns=keep-id -it -v $PWD:/work --entrypoint /opt/stm32cubeide/headless-build.sh ssaiotmcu_build -data /tmp/ws -import . -build AIOT/Release
 ```
+
+### Build ID
+
+The pre-build step, `tools/build_id.sh`, writes the generated and untracked
+`Core/Inc/build_id.h`: the abbreviated commit, plus a dirty flag when any
+tracked file is modified. The protocol requires both —
+[Read MCU info](#22-examples) reports them.
+
+`.version` in the project root decides where they come from. `.gitattributes`
+marks it `export-subst`, so every tree packaged by `git archive` — including the
+source archives GitHub generates for a tag — has the commit substituted into it
+and builds with no git at all. A checkout still holds the placeholder, and git
+is read instead. **A tree that is neither fails the build** rather than
+producing firmware that cannot be traced back to a commit, so releasing the
+sources needs no extra step: any archive carries its own build id.

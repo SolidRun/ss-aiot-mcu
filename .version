@@ -1,0 +1,10 @@
+# Build id of this source tree, read by tools/build_id.sh.
+#
+# .gitattributes marks this file export-subst, so git substitutes the commit
+# below whenever the tree is packaged with git archive — including the source
+# archives GitHub generates for a tag. In a checkout the placeholder is left
+# as it stands and the build id is read from git instead.
+#
+# An archive is made from a committed tree, so it is never dirty.
+BUILD_ID=0x$Format:%H$
+BUILD_ID_DIRTY=0

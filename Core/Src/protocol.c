@@ -10,8 +10,8 @@
 #include "nmea.h"
 #include <string.h>
 
-/* Overwritten before every build, by the pre-build step in .cproject and by the
- * workflow. Included here alone, so a new commit rebuilds this object only. */
+/* Regenerated before every build by tools/build_id.sh, the pre-build step in
+ * .cproject. Included here alone, so a new commit rebuilds this object only. */
 #include "build_id.h"
 
 extern volatile bool gps_time_synced;
