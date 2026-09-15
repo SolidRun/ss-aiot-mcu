@@ -11,6 +11,14 @@
 					"type": "application",
 					"name": "GitHub Actions",
 					"publisher": "GitHub"
+				},
+				{
+					"bom-ref": "stm32cubeide",
+					"type": "application",
+					"name": "STM32CubeIDE",
+					"version": "1.19.0_25607_20250703_0907",
+					"description": "Builds the firmware, and supplies the GNU Tools for STM32 13.3.rel1.20240926-1715 toolchain whose runtime libraries are listed as components",
+					"publisher": "STMicroelectronics NV"
 				}
 			]
 		},
@@ -61,6 +69,74 @@
 				{
 					"type": "source-distribution",
 					"url": "https://github.com/embeddedartistry/embedded-resources/blob/00c1125f1bc3e1369c5022c54dd58eda40834d39/examples/c/circular_buffer/circular_buffer_no_modulo.c"
+				}
+			]
+		},
+		{
+			"bom-ref": "libgcc",
+			"type": "library",
+			"name": "libgcc",
+			"version": "13.3.1",
+			"description": "GCC low-level runtime support library linked into the firmware, providing the integer division and switch-table helpers the compiler emits calls to. Distributed in GNU Tools for STM32 13.3.rel1.20240926-1715",
+			"publisher": "Free Software Foundation",
+			"supplier": {
+				"name": "STMicroelectronics NV",
+				"url": [
+					"https://github.com/STMicroelectronics/gnu-tools-for-stm32"
+				]
+			},
+			"purl": "pkg:github/STMicroelectronics/gnu-tools-for-stm32@13.3.rel1.20240926-1715#src/gcc",
+			"pedigree": {
+				"notes": "Patched and built by STMicroelectronics for GNU Tools for STM32, so this is not the stock upstream release. The patch set and the sources it was built from are published in this component's source-distribution external reference."
+			},
+			"licenses": [
+				{
+					"expression": "GPL-3.0-or-later WITH GCC-exception-3.1"
+				}
+			],
+			"externalReferences": [
+				{
+					"type": "vcs",
+					"url": "https://github.com/STMicroelectronics/gnu-tools-for-stm32.git"
+				},
+				{
+					"type": "source-distribution",
+					"url": "https://github.com/STMicroelectronics/gnu-tools-for-stm32/archive/refs/tags/13.3.rel1.20240926-1715.tar.gz"
+				}
+			]
+		},
+		{
+			"bom-ref": "newlib",
+			"type": "library",
+			"name": "newlib",
+			"version": "4.4.0",
+			"description": "C runtime library linked into the firmware, distributed in GNU Tools for STM32 13.3.rel1.20240926-1715",
+			"supplier": {
+				"name": "STMicroelectronics NV",
+				"url": [
+					"https://github.com/STMicroelectronics/gnu-tools-for-stm32"
+				]
+			},
+			"purl": "pkg:github/STMicroelectronics/gnu-tools-for-stm32@13.3.rel1.20240926-1715#src/newlib",
+			"pedigree": {
+				"notes": "Patched and built by STMicroelectronics for GNU Tools for STM32, so this is not the stock upstream release. The patch set and the sources it was built from are published in this component's source-distribution external reference."
+			},
+			"licenses": [
+				{
+					"license": {
+						"name": "Various MIT/BSD-like, collected in COPYING.NEWLIB",
+						"url": "https://github.com/STMicroelectronics/gnu-tools-for-stm32/blob/13.3.rel1.20240926-1715/src/newlib/COPYING.NEWLIB"
+					}
+				}
+			],
+			"externalReferences": [
+				{
+					"type": "vcs",
+					"url": "https://github.com/STMicroelectronics/gnu-tools-for-stm32.git"
+				},
+				{
+					"type": "source-distribution",
+					"url": "https://github.com/STMicroelectronics/gnu-tools-for-stm32/archive/refs/tags/13.3.rel1.20240926-1715.tar.gz"
 				}
 			]
 		},
@@ -168,6 +244,8 @@
 			"ref": "ss-aiot-mcu",
 			"dependsOn": [
 				"embedded-resources-circular-buffer",
+				"libgcc",
+				"newlib",
 				"sths34pf80-pid",
 				"stm32-ism330dhcx",
 				"stm32cubeu0"

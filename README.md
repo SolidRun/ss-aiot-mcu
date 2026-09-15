@@ -1087,8 +1087,12 @@ sources needs no extra step: any archive carries its own build id.
 
 Due to the lack of mature dependency management tooling for C/C++, this project uses a hand-crafted [SBOM file](sbom_cdx.json). This file must be manually updated by project maintainers whenever third-party libraries are added or upgraded.
 
-This project uses the [STM32CubeMX](https://www.st.com/en/development-tools/stm32cubemx.html) code generator to supply HAL drivers. For simplicity, the entire [STM32CubeU0 package](https://github.com/STMicroelectronics/STM32CubeU0) is declared in the SBOM, even though only a subset (the HAL layers and CMSIS) is actually compiled. Consequently, the SBOM reflects the broader source-tree footprint rather than a strict binary analysis, meaning it includes licenses for ST middleware that are not present in the compiled firmware.
+This project uses the [STM32CubeMX](https://www.st.com/en/development-tools/stm32cubemx.html) code generator to supply HAL drivers. For simplicity, the entire [STM32CubeU0 package](https://github.com/STMicroelectronics/STM32CubeU0) is declared in the SBOM, even though only a subset is actually compiled.
 
-**The SBOM does not describe the compiled binary.** Being source-level, it tracks third-party source dependencies only, and omits the compiler runtimes the ARM GCC toolchain links in statically: `newlib` and `libgcc`. The latter is `GPL-3.0-or-later WITH GCC-exception-3.1`, the only GPL-family code in the firmware.
+The C runtime and the compiler support library come from [GNU Tools for STM32](https://github.com/STMicroelectronics/gnu-tools-for-stm32), the toolchain bundled with [STM32CubeIDE](https://www.st.com/en/development-tools/stm32cubeide.html). `newlib` and `libgcc` are likewise declared in full, although the linker pulls in only a small part of either.
+
+The SBOM is therefore not based on binary analysis. Every component is declared at package scope, so it lists licenses and code the firmware image does not contain.
 
 The current list of ST licenses was extracted from the vendor's official SBOM using `jq '[.components[]?.licenses[]?] | unique' STM32Cube_FW_U0_V1.3.0/sbom_cdx.json`, and must be re-examined when upgrading the ST package.
+
+The toolchain publishes no SBOM. The `newlib` and `libgcc` licenses were read from [LICENSE.md](https://github.com/STMicroelectronics/gnu-tools-for-stm32/blob/13.3.rel1.20240926-1715/LICENSE.md) at the pinned tag, which maps each bundled component to its `COPYING` files, and their upstream versions from the toolchain itself (`arm-none-eabi-gcc -dumpfullversion` and `_newlib_version.h`). Both must be re-examined when upgrading STM32CubeIDE.
