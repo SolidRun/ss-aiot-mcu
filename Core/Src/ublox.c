@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 #include "ublox.h"
 #include "nmea.h"
 #include "i2c.h"

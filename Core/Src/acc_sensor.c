@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 #include "acc_sensor.h"
 #include "stm32u0xx_hal.h"
 #include "main.h"

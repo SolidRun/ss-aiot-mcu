@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 #ifndef BQ25638_H
 #define BQ25638_H
 

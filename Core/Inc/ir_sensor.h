@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 #ifndef IR_SENSOR_H
 #define IR_SENSOR_H
 

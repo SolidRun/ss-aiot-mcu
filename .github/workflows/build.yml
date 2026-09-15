@@ -62,5 +62,6 @@ jobs:
             Release/*.hex
             Release/*.bin
             Release/*.map
+            LICENSE.txt
             THIRD-PARTY-NOTICES.txt
           if-no-files-found: error

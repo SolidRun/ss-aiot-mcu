@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-3-Clause
 #
 # Generate build_id.h, the header that tells the firmware which commit it was
 # built from. Called by the pre-build step in .cproject.

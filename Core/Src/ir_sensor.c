@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 /**
  * @file    ir_sensor.c
  * @brief   IR Sensor (STHS34PF80) driver wrapper for STM32U03

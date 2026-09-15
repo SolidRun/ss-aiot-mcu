@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 #ifndef UBLOX_H
 #define UBLOX_H
 

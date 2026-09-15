@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-3-Clause
 #include "bq25638.h"
 
 extern I2C_HandleTypeDef hi2c1; // I2C handle from CubeMX

@@ -7,7 +7,7 @@ machine-readable inventory of the same components is sbom_cdx.json, which is
 published alongside the firmware binaries.
 
 Nothing here modifies the license of this project's own source, which is
-specified in the "LICENSE" file.
+specified in the "LICENSE.txt" file.
 
 Contents
   1. Embedded Artistry circular buffer  ..................... CC0-1.0
