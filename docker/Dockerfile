@@ -13,10 +13,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # unzip and git for the installer and the .cproject pre-build step; the
 # libraries are what the IDE launcher links against, headless or not.
-# For sbom generation: bear.
+# For sbom generation: bear, jq. For packaging build artifacts: zip.
 RUN set -e; \
         apt-get update; \
-        apt-get install -y --no-install-recommends bear ca-certificates git libusb-1.0-0 libgtk-3-0 libncurses5 libwebkit2gtk-4.0-37 locales unzip; \
+        apt-get install -y --no-install-recommends bear ca-certificates git libusb-1.0-0 libgtk-3-0 libncurses5 libwebkit2gtk-4.0-37 locales unzip zip; \
         rm -rf /var/lib/apt/lists/*; \
         :
 

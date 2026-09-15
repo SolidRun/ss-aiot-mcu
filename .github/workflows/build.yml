@@ -3,6 +3,10 @@ name: build
 on:
   push:
     branches: [ "main" ]
+    # A tag builds exactly as main does and additionally publishes a release.
+    # BUILD_ID is the commit hash, so the firmware a tag produces is identical
+    # to the one already built from that commit on main.
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
   # Allows you to run this workflow manually from the Actions tab
@@ -28,6 +32,9 @@ jobs:
     needs:
       - prepare
     timeout-minutes: 10
+    permissions:
+      # only needed by the release step below, which runs on tags alone
+      contents: write
     container:
       image: ciserver.ci:5000/${{ github.repository_id }}:stm32cubeide-1.19.0_25607_20250703_0907_amd64
       credentials:
@@ -39,11 +46,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # --short=8 matches --abbrev=8 in the build_id.h generator, so the
-      # artifact name carries the same BUILD_ID the firmware reports.
-      - name: Short commit hash
+      - name: Determine Version
         id: rev
-        run: echo "short=$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            printf 'version=%.8s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
 
       # Headless CDT build of the Release configuration, the same one the IDE
       # builds. It runs the .cproject pre-build step, so build_id.h is
@@ -52,16 +62,37 @@ jobs:
       # configuration's output converters, and it prints the size itself.
       - name: Compile, Link, Generate hex and bin
         run: |
+          headless-build.sh -data /tmp/ws -import . -build ${{ env.TARGET }}/Debug
           headless-build.sh -data /tmp/ws -import . -build ${{ env.TARGET }}/Release
 
+      - name: Generate Bundle
+        id: bundle
+        env:
+          FILES: >-
+            Debug/*.elf Debug/*.hex Debug/*.bin Debug/*.map
+            Release/*.elf Release/*.hex Release/*.bin Release/*.map
+            LICENSE.txt THIRD-PARTY-NOTICES.txt
+        run: |
+          BUNDLE=${{ env.TARGET }}-${{ steps.rev.outputs.version }}
+          mkdir -p "$BUNDLE"
+          cp --parents $FILES "$BUNDLE/"
+          zip -r "$BUNDLE.zip" "$BUNDLE"
+          rm -rf "$BUNDLE"
+          echo "bundle=$BUNDLE.zip" >> "$GITHUB_OUTPUT"
+
+      # publish bundle as CI artifact
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.TARGET }}-firmware-${{ steps.rev.outputs.short }}
-          path: |
-            Release/*.elf
-            Release/*.hex
-            Release/*.bin
-            Release/*.map
-            LICENSE.txt
-            THIRD-PARTY-NOTICES.txt
+          name: ${{ steps.bundle.outputs.bundle }}
+          path: ${{ steps.bundle.outputs.bundle }}
+          archive: false
           if-no-files-found: error
+
+      # publish bundle and sbom as Release artifacts
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ steps.bundle.outputs.bundle }}
+          fail_on_unmatched_files: true
