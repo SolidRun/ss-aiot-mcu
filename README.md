@@ -82,12 +82,12 @@ firmware.
 
 Neither device offers a `raw` attribute. The controller serves samples from a
 queue that is consumed by being read, so there is no current value to hand out
-one at a time - read from the buffer instead, one sample if that is all that is
-wanted:
+one at a time - read from the buffer instead. Ensure to pass buffer size 8,
+this is the maximum samples returned in a single i2c transaction - otherwise
+samples might be lost:
 
 ```sh
-iio_readdev -b 8 -s 64 ssaiot-sc-accel > motion.bin
-iio_readdev -b 1 -s 1 ssaiot-sc-accel > sample.bin
+iio_readdev -b 8 -s 52 ssaiot-sc-accel > motion.bin
 ```
 
 Apply `scale`, and for temperature `offset` as well, to interpret the result:
@@ -164,10 +164,11 @@ iio_attr -c ssaiot-sc-ir proximity0 label
 There is no `raw` attribute. The controller serves readings from a queue that is
 consumed by being read, so there is no current value to hand out one at a time.
 All three arrive together in one record, so they always scan together and the
-sample layout is fixed:
+sample layout is fixed. Ensure to pass buffer size 5, this is the maximum samples
+returned in a single i2c transaction - otherwise samples might be lost:
 
 ```sh
-iio_readdev -b 1 -s 4 ssaiot-sc-ir > ir.bin
+iio_readdev -b 5 -s 30 ssaiot-sc-ir > ir.bin
 ```
 
 At a low output data rate the libiio tools give up before the buffer fills.
