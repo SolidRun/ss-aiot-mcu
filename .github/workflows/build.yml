@@ -164,12 +164,19 @@ jobs:
           # - serial number (uuid, only added from CI)
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           SERIAL="urn:uuid:$(cat /proc/sys/kernel/random/uuid)"
+          # version is tag for releases, commit hash otherwise
+          if [ "${{ github.ref_type }}" = tag ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.sha }}"
+          fi
           jq --arg ts "$TIMESTAMP" \
              --arg serial "$SERIAL" \
              --arg sha "${{ github.sha }}" \
+             --arg version "$VERSION" \
              '.serialNumber = $serial |
               .metadata.timestamp = $ts |
-              .metadata.component.version = $sha |
+              .metadata.component.version = $version |
               .metadata.component.purl = "pkg:github/SolidRun/ss-aiot-mcu@\($sha)"' \
               sbom_cdx.json > sbom_cdx.json.gen
               mv sbom_cdx.json.gen sbom_cdx.json
@@ -184,7 +191,7 @@ jobs:
             LICENSE.txt THIRD-PARTY-NOTICES.txt
             sbom_cdx.json
         run: |
-          BUNDLE=${{ env.TARGET }}-${{ steps.rev.outputs.version }}
+          BUNDLE=${{ env.TARGET }}-firmware-${{ steps.rev.outputs.version }}
           mkdir -p "$BUNDLE"
           cp --parents $FILES "$BUNDLE/"
           zip -r "$BUNDLE.zip" "$BUNDLE"
