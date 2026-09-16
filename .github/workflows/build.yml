@@ -11,6 +11,12 @@ on:
     branches: [ "main" ]
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      ignore_cache:
+        description: 'Skip restoring cache from previous builds'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   prepare:
@@ -54,6 +60,87 @@ jobs:
           else
             printf 'version=%.8s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           fi
+
+      # locate user home per passwd file, as referenced by some tools
+      - name: Locate User Home
+        id: home
+        run: |
+          echo "path=$(getent passwd "$(id -u)" | cut -d: -f6)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch cache from server
+        if: ${{ !inputs.ignore_cache }}
+        uses: tespkg/actions-cache/restore@v1
+        with:
+          endpoint: ciserver.ci
+          port: 9000
+          insecure: true
+          accessKey: ${{ secrets.CI_CACHE_MINIO_ACCESS }}
+          secretKey: ${{ secrets.CI_CACHE_MINIO_SECRET }}
+          bucket: cicache
+          use-fallback: false
+          key: ${{ github.repository }}/main
+          path: |
+            ${{ steps.home.outputs.path }}/.stm32cubemx
+
+      # regenerate code and confirm tree is still clean (catch changes to AIOT.ioc)
+      - name: Re-generate Code (STM32CubeMX)
+        id: stm32cubemx
+        env:
+          # "project path" names the parent directory and STM32CubeMX appends
+          # the project name to it, so it is given one holding a symlink of
+          # that name back to the checkout. Generation has to land there:
+          # only an in-place run merges the USER CODE sections back in.
+          #
+          # The .ioc is named relative to the checkout, which is where the step
+          # runs. github.workspace is the path on the runner rather than the one
+          # the container sees, and naming that one would send STM32CubeMX
+          # looking for a file that does not exist there.
+          CUBEMX_SCRIPT: |
+            config load ${{ env.TARGET }}.ioc
+            project path /tmp/cubemx
+            project generate
+            exit
+          CUBEMX_TIMEOUT: 60
+        run: |
+          mkdir -p /tmp/cubemx
+          ln -sfnv "$PWD" /tmp/cubemx/${{ env.TARGET }}
+          printf '%s' "$CUBEMX_SCRIPT" > /tmp/verify.cubemx
+          headless-cubemx.sh /tmp/verify.cubemx
+          # STM32CubeMX always writes an IAR project and stamps the .ioc with
+          # that toolchain. Undo only that, then require everything else to be
+          # unchanged. Leaving it would also make tools/build_id.sh stamp the
+          # build dirty.
+          git checkout -- ${{ env.TARGET }}.ioc .mxproject
+          rm -rf EWARM
+          # -A stages untracked files too, so a peripheral that was added to
+          # the model but never committed is caught as well.
+          git add -A
+          git diff --cached --exit-code
+
+      # if cubemx timed out, publish its screenshot as CI artifact
+      - name: Publish CubeMX Timeout Error
+        if: failure() && steps.stm32cubemx.conclusion == 'failure' && hashFiles('timeout.png') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: cubemx-timeout
+          path: timeout.png
+          archive: false
+          if-no-files-found: error
+
+      - name: Update cache on the server (build may have failed)
+        if: ${{ !cancelled() }}
+        uses: tespkg/actions-cache/save@v1
+        with:
+          endpoint: ciserver.ci
+          port: 9000
+          insecure: true
+          accessKey: ${{ secrets.CI_CACHE_MINIO_ACCESS }}
+          secretKey: ${{ secrets.CI_CACHE_MINIO_SECRET }}
+          bucket: cicache
+          use-fallback: false
+          key: ${{ github.repository }}/main
+          path: |
+            ${{ steps.home.outputs.path }}/.stm32cubemx
 
       # Headless CDT build of the Release configuration, the same one the IDE
       # builds. It runs the .cproject pre-build step, so build_id.h is

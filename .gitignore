@@ -10,8 +10,8 @@ Release/
 # written by the pre-build step, tools/build_id.sh
 /Core/Inc/build_id.h
 
-# STM32CubeIDE installer, fetched into the docker build context by CI
-/docker/*.sh.zip
+# STM32 packages, fetched into the docker build context by CI
+/docker/*.zip
 
 # noisy cubeide settings without functional impact
 /.settings/language.settings.xml

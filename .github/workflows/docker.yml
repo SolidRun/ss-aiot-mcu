@@ -10,6 +10,11 @@ on:
         required: true
         default: '1.19.0_25607_20250703_0907_amd64'
         type: string
+      cube_repo_pkgs:
+        description: 'STM32Cube code generation packages, space separated filenames'
+        required: true
+        default: 'stm32cube_fw_u0_v130.zip'
+        type: string
 
 jobs:
   container:
@@ -19,9 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # ST offers no anonymous download, so the installer comes from the
-      # protected bucket into the docker build context.
-      - name: Fetch STM32CubeIDE installer
+      # ST offers no anonymous download, so the installer, and required packages
+      # are fetched from the protected bucket into the docker build context.
+      - name: Fetch STM32 Packages
         shell: bash -e {0}
         env:
           ACCESS_KEY: ${{ secrets.PROTECTED_S3_ACCESS }}
@@ -32,6 +37,9 @@ jobs:
           sudo apt-get -y install s3cmd
           cd docker
           s3cmd --access_key="$ACCESS_KEY" --secret_key="$SECRET_KEY" --host="$HOST" --host-bucket="%(bucket)s.$HOST" get s3://$BUCKET/stmicro/st-stm32cubeide_${{ inputs.cubeide_version }}.sh.zip
+          for pkg in ${{ inputs.cube_repo_pkgs }}; do
+            s3cmd --access_key="$ACCESS_KEY" --secret_key="$SECRET_KEY" --host="$HOST" --host-bucket="%(bucket)s.$HOST" get s3://$BUCKET/stmicro/$pkg
+          done
 
       - name: Get User/Group ID
         id: uid_step
@@ -61,6 +69,7 @@ jobs:
             USER_ID=${{ steps.uid_step.outputs.userid }}
             GROUP_ID=${{ steps.uid_step.outputs.groupid }}
             CUBEIDE_VERSION_FULL=${{ inputs.cubeide_version }}
+            CUBE_REPO_PKGS=${{ inputs.cube_repo_pkgs }}
 
       - name: Report image
         run: |

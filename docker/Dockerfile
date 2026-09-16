@@ -2,11 +2,14 @@
 
 # STM32CubeIDE, for headless builds of this project.
 #
-# ST offers no anonymous download of the IDE, so the installer is not fetched
-# here. Place the .sh.zip ST publishes next to this file before building.
+# ST offers no anonymous download of the IDE, so nothing is fetched here. Place
+# the archives ST publishes next to this file before building:
 #
-# Bump CUBEIDE_VERSION_FULL on an upgrade. It must match the installer filename
-# "st-stm32cubeide_${CUBEIDE_VERSION_FULL}.sh.zip".
+#   st-stm32cubeide_${CUBEIDE_VERSION_FULL}.sh.zip  the IDE installer
+#   ${CUBE_REPO_PKGS}                               the STM32Cube code generation packages
+#
+# Both arguments are filenames, and are bumped on an upgrade. CUBE_REPO_PKGS
+# is a space separated list, so a build can be given more than one package.
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -14,9 +17,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # unzip and git for the installer and the .cproject pre-build step; the
 # libraries are what the IDE launcher links against, headless or not.
 # For sbom generation: bear, jq. For packaging build artifacts: zip.
+# For STM32CubeMX: imagemagick, libXtst, xvfb.
 RUN set -e; \
         apt-get update; \
-        apt-get install -y --no-install-recommends bear ca-certificates git jq libusb-1.0-0 libgtk-3-0 libncurses5 libwebkit2gtk-4.0-37 locales unzip zip; \
+        apt-get install -y --no-install-recommends bear ca-certificates git imagemagick jq libusb-1.0-0 libgtk-3-0 libncurses5 libwebkit2gtk-4.0-37 libxtst6 locales unzip xvfb zip; \
         rm -rf /var/lib/apt/lists/*; \
         :
 
@@ -31,6 +35,23 @@ RUN --mount=type=bind,target=/ctx set -e -x; \
     rm -f /tmp/st-stm32cubeide_${CUBEIDE_VERSION_FULL}.sh; \
     test -x /opt/stm32cubeide/stm32cubeide; \
     :
+
+# STM32CubeMX reads the STM32Cube firmware package from a repository below the
+# JVM's user.home, and asks for my.st.com credentials for authenticated
+# download. Provide the package in a root-owned repository at /opt/cubemx-repo.
+# The archives are read from the bind-mounted build context rather than
+# COPYed, so they never become a layer of the image.
+# Additional packages / versions can be added here as needed.
+ARG CUBE_REPO_PKGS=stm32cube_fw_u0_v130.zip
+RUN --mount=type=bind,target=/ctx set -e; \
+    for pkg in ${CUBE_REPO_PKGS}; do \
+        unzip -q -d /opt/cubemx-repo /ctx/$pkg; \
+    done; \
+    :
+
+# runs a STM32CubeMX command script against a project, see its header
+COPY headless-cubemx.sh /usr/local/bin/headless-cubemx.sh
+RUN chmod 0755 /usr/local/bin/headless-cubemx.sh
 
 RUN locale-gen en_US.UTF-8
 RUN update-ca-certificates
