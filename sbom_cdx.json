@@ -10,15 +10,8 @@
 					"bom-ref": "github-actions",
 					"type": "application",
 					"name": "GitHub Actions",
+					"description": "Stamps the serial number, the timestamp and the commit into this BOM when it builds a release",
 					"publisher": "GitHub"
-				},
-				{
-					"bom-ref": "stm32cubeide",
-					"type": "application",
-					"name": "STM32CubeIDE",
-					"version": "1.19.0_25607_20250703_0907",
-					"description": "Builds the firmware, and supplies the GNU Tools for STM32 13.3.rel1.20240926-1715 toolchain whose runtime libraries are listed as components",
-					"publisher": "STMicroelectronics NV"
 				}
 			]
 		},
@@ -249,6 +242,32 @@
 				"sths34pf80-pid",
 				"stm32-ism330dhcx",
 				"stm32cubeu0"
+			]
+		}
+	],
+	"formulation": [
+		{
+			"bom-ref": "firmware-build",
+			"components": [
+				{
+					"bom-ref": "stm32cubeide",
+					"type": "application",
+					"name": "STM32CubeIDE",
+					"version": "1.19.0_25607_20250703_0907",
+					"description": "Bundles the STM32CubeMX code generator, and the GNU Tools for STM32 13.3.rel1.20240926-1715 toolchain whose runtime libraries are listed as components",
+					"publisher": "STMicroelectronics NV"
+				}
+			],
+			"workflows": [
+				{
+					"bom-ref": "workflow-firmware",
+					"uid": "build.yml/firmware",
+					"name": "Firmware build",
+					"description": "STM32CubeIDE generates the HAL initialisation code from AIOT.ioc with its bundled STM32CubeMX, then compiles and links the result. The definition this describes is .github/workflows/build.yml, which also requires the generated code to match what is committed before it builds.",
+					"taskTypes": [
+						"build"
+					]
+				}
 			]
 		}
 	]
