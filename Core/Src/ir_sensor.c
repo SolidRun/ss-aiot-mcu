@@ -61,31 +61,66 @@ static int32_t ir_sensor_read(void *handle, uint8_t reg, uint8_t *data, uint16_t
 // Public functions
 //------------------------------------------------------------------------------
 
+/* init function return code helper */
+enum { IR_INIT_STEP_BASE = __COUNTER__ };
+#define IR_INIT_STEP (__COUNTER__ - IR_INIT_STEP_BASE)
+
 /**
  * @brief Initialize IR Sensor context
+ * @return 0 if OK, else the number of the step that failed
  */
-void IR_SENSOR_InitCtx()
+int IR_SENSOR_Init(void)
 {
+    sths34pf80_int_mode_t int_mode_cfg = {
+        .pin = STHS34PF80_PUSH_PULL,
+        .polarity = STHS34PF80_ACTIVE_HIGH,
+    };
+
     /* initialise samples buffer tracking structures (can't fail, do early) */
     ir_sample_cbuf = circular_buf_init(&ir_sample_cbuf_priv, ir_sample_cbuf_stor, sizeof(ir_sample_cbuf_stor));
 
+    /* initialise context early, must be latest before enabling interrupts */
     ir_sensor_ctx.write_reg = ir_sensor_write;
     ir_sensor_ctx.read_reg  = ir_sensor_read;
     ir_sensor_ctx.handle    = &hi2c1;  // I2C handle from CubeMX
     ir_sensor_ctx.mdelay    = HAL_Delay;
 
-    sths34pf80_int_mode_t int_mode_cfg;
-    int_mode_cfg.pin = STHS34PF80_PUSH_PULL;
-    int_mode_cfg.polarity = STHS34PF80_ACTIVE_HIGH;
-    sths34pf80_int_mode_set(&ir_sensor_ctx, int_mode_cfg);
+    if (sths34pf80_int_mode_set(&ir_sensor_ctx, int_mode_cfg) != 0)
+        return IR_INIT_STEP;
 
-    //sths34pf80_int_or_set(&ir_sensor_ctx, STHS34PF80_INT_MOTION);
-    sths34pf80_int_or_set(&ir_sensor_ctx, STHS34PF80_INT_MOTION_PRESENCE);
-    sths34pf80_presence_threshold_set(&ir_sensor_ctx, ir_ths);
-    sths34pf80_motion_threshold_set(&ir_sensor_ctx, ir_ths);
-    sths34pf80_route_int_set(&ir_sensor_ctx, STHS34PF80_INT_OR);
-    sths34pf80_tobject_algo_compensation_set(&ir_sensor_ctx, 1);
+    /* set "INT_OR" to report motion and presence, bypassed in continuous mode */
+    if (sths34pf80_int_or_set(&ir_sensor_ctx, STHS34PF80_INT_MOTION_PRESENCE) != 0)
+        return IR_INIT_STEP;
 
+    if (sths34pf80_presence_threshold_set(&ir_sensor_ctx, ir_ths) != 0)
+        return IR_INIT_STEP;
+
+    if (sths34pf80_motion_threshold_set(&ir_sensor_ctx, ir_ths) != 0)
+        return IR_INIT_STEP;
+
+    if (sths34pf80_tobject_algo_compensation_set(&ir_sensor_ctx, 1) != 0)
+        return IR_INIT_STEP;
+
+    /*
+     * Drive interrupt signal from data-ready, i.e. per sample.
+     * Implicitly covers algorithm events which can only occur after a new sample.
+     */
+    if (sths34pf80_route_int_set(&ir_sensor_ctx, STHS34PF80_INT_DRDY) != 0)
+        return IR_INIT_STEP;
+
+    /* data-ready is latched, read FUNC_STATUS over i2c to clear */
+    if (sths34pf80_drdy_mode_set(&ir_sensor_ctx, STHS34PF80_DRDY_LATCHED) != 0)
+        return IR_INIT_STEP;
+
+    /* hold data till both lsb and msb were read */
+    if (sths34pf80_block_data_update_set(&ir_sensor_ctx, PROPERTY_ENABLE) != 0)
+        return IR_INIT_STEP;
+
+    /* set odr, implicitly starts sampling in continuous mode */
+    if (sths34pf80_odr_set(&ir_sensor_ctx, STHS34PF80_ODR_AT_1Hz) != 0)
+        return IR_INIT_STEP;
+
+    return 0;
 }
 
 /**
@@ -102,16 +137,6 @@ int IR_SENSOR_CheckConnection(void)
         return -2;
 
     return 0;
-}
-
-/**
- * @brief Configure sensor for continuous measurement
- * @param odr_hz Desired output data rate (use enum sths34pf80_odr_t)
- */
-void IR_SENSOR_StartContinuous(sths34pf80_odr_t odr)
-{
-    sths34pf80_odr_set(&ir_sensor_ctx, odr);
-    sths34pf80_block_data_update_set(&ir_sensor_ctx, PROPERTY_ENABLE);
 }
 
 /**
@@ -190,20 +215,26 @@ static bool IR_SamplePop(ir_sample_t *out)
     return true;
 }
 
-/* Current sample timestamp counter - see the header */
+/* Current sample timestamp counter - see the header.
+ *
+ * Read IR data opens its response with this, so the SOM can age the samples
+ * that follow against the instant it asked. */
 uint32_t IR_TimestampNow(void)
 {
     return IR_TicksTo25us(Timebase_Now());
 }
 
-/* Read one sample from the sensor into the buffer, discards oldest when full */
-static int IR_ReadSample(void)
+/*
+ * Read one sample from the sensor into the buffer, discards oldest when full.
+ * Derives timestamp from tick argument which should correspond to last
+ * data-ready interrupt time.
+ */
+static int IR_ReadSample(uint32_t tick)
 {
     ir_sample_t smp;
     int16_t presence, motion, tambient;
 
-    /* stamp before the reads, which take three I2C1 transactions */
-    smp.timestamp = IR_TimestampNow();
+    smp.timestamp = IR_TicksTo25us(tick);
 
     /* into locals: the fields are packed, so their addresses are unaligned */
     if (IR_SENSOR_ReadPresence(&presence) != 0)
@@ -325,6 +356,8 @@ void IR_HandleInt()
  */
 void IR_ProcessInt(uint8_t *detail)
 {
+	uint32_t tick;
+	uint8_t drdy;
 	int events;
 
 	*detail = 0;
@@ -332,34 +365,33 @@ void IR_ProcessInt(uint8_t *detail)
 	if (!ir_int_pending)
 		return;
 
-	/* clear before the read, so an interrupt arriving during it is kept */
+	/* clear before the reads, so an interrupt arriving during them is kept */
 	ir_int_pending = false;
+	tick = ir_int_tick;
 
-	events = IR_ReadEvents();
-
-    /* on bus error interrupt may not have been cleared, re-arm as pending */
-	if (events < 0) {
+	/* check data-ready status, does not clear interrupt */
+	if (IR_SENSOR_DRDY_Status(&drdy) != 0) {
+        /* on bus error interrupt may not have been cleared, re-arm as pending */
 		ir_int_pending = true;
 		return;
 	}
 
+    /* reading FUNC_STATUS clears all interrupts */
+	events = IR_ReadEvents();
+	if (events < 0) {
+        /* on bus error interrupt may not have been cleared, re-arm as pending */
+		ir_int_pending = true;
+		return;
+	}
+
+	if (drdy)
+		(void)IR_ReadSample(tick);
+
 	*detail = (uint8_t)events;
 }
-
-/* samples poll interval */
-#define IR_POLL_MS 1000U
 
 /* called from main thread periodically */
 void IR_Process(void)
 {
-    static uint32_t last_poll;
-    static bool first = true;
-
-    if (!first && (HAL_GetTick() - last_poll) < IR_POLL_MS)
-        return;
-
-    first = false;
-    last_poll = HAL_GetTick();
-
-    (void)IR_ReadSample();
+    /* no-op, using continuous mode with data-ready interrupt trigger */
 }

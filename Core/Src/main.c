@@ -320,8 +320,7 @@ int main(void)
 
   ACC_Init();
 
-  IR_SENSOR_InitCtx();
-  IR_SENSOR_StartContinuous(STHS34PF80_ODR_AT_1Hz);
+  IR_SENSOR_Init();
 
   BQ25638_Init();
 

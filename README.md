@@ -118,18 +118,19 @@ All five bytes are accumulated latches, and the read clears them. Two sources
 firing between reads produce both bits rather than the last one: presence does not
 mask motion, and an accelerometer wake-up does not overwrite an earlier one.
 
-The reason the firmware cannot report present state is physical. Both sensors
-drive their INT pin as a **level**, not a pulse — `ALGO_CONFIG.INT_PULSED` is `0`
-on the STHS34PF80 — and the firmware watches only the rising edge. There is no
-falling-edge handler anywhere in the project. So a condition that stays asserted
-produces exactly one event, and once the master has consumed it there is no second
-edge and no way to ask whether it is still true. For present state, read the
-sensor's own value command instead: `0x12 0x02` returns live presence and motion
-counts.
+The reason is physical, and it differs between the two sensors. The
+accelerometer drives its INT pin as a **level**, and the firmware watches only
+the rising edge — there is no falling-edge handler anywhere in the project — so
+a condition that stays asserted produces exactly one event, and once the master
+has consumed it there is no second edge and no way to ask whether it is still
+true.
+
+The infrared sensor's flags are re-read once per second whatever the master
+does, so a held condition is reported again after every read of the interrupt
+status, and the read that reports nothing is what marks its end.
 
 The snapshot is taken with interrupts masked, so `data[0]` is exactly the OR of
-the sources at a single instant, and an edge that arrives during the read is
-reported on the next one rather than lost.
+the sources at a single instant.
 
 #### Why open drain, and why active low
 
@@ -294,7 +295,7 @@ Notes on individual commands:
   carries no interrupt information and clears none — that belongs to
   `Read interrupt status`.
 
-  The MCU reads one sample every second from the main loop, matching the
+  The MCU reads one sample per data-ready interrupt, one per second at the
   sensor's 1 Hz output data rate, so 30 samples is 30 s; older samples are
   overwritten. See [Infrared Sensor](#32-infrared-sensor-ir).
 - **Read ACC motion data** opens with a snapshot of the MCU timebase and then
@@ -837,13 +838,19 @@ Threshold (mg) = FS(g) × (threshold / 64) × 1000
 
 ### 3.2 Infrared Sensor (IR):
 
-Sensor: STHS34PF80 on I2C1, continuous mode at 1 Hz, presence and motion routed
-to a single interrupt line (`INT_OR`).
+Sensor: STHS34PF80 on I2C1, continuous mode at 1 Hz, with the `INT` line driven
+by **data ready** (`IEN = 01`) rather than by the presence and motion
+algorithms. Data ready is latched, and reading `FUNC_STATUS` clears it.
 
-The sensor has no FIFO, so the MCU reads one {presence, motion, tAmb} sample
-every second from the main loop into a 30-entry ring buffer, stamped on the MCU
-timebase as it is read. `Read IR data` hands that ring to the master and touches
-no bus.
+Servicing that interrupt reads `FUNC_STATUS` for the presence and motion flags
+and then one {presence, motion, tAmb} sample into a 30-entry ring buffer,
+stamped with the MCU tick at which the interrupt arrived. The sensor has no
+FIFO, so one interrupt carries one sample. `Read IR data` hands that ring to the
+master and touches no bus.
+
+An algorithm event cannot precede the sample it was computed from, so data ready
+covers both: `PRES_FLAG` and `MOT_FLAG` are threshold comparisons on `TPRESENCE`
+and `TMOTION`, which are members of the output set data ready announces.
 
 Interrupt code:
 
@@ -978,13 +985,11 @@ Current firmware behaviour the master side should be aware of.
 - **No UBX is parsed.** The firmware reads NMEA only, which means the receiver's
   `fullyResolved` / `confirmedTime` / `tAcc` indications are not available — see
   [Timekeeping](#25-timekeeping).
-- **The interrupt bytes report events, not present state**, and there is no
-  falling-edge handler, so the master is never told when a condition ends. See
+- **The interrupt bytes report events, not present state.** There is no
+  falling-edge handler, so the accelerometer never reports the end of a
+  condition. IR presence and motion are re-raised once per sample period for as
+  long as they are detected. See
   [Every byte answers "what fired", never "what is true now"](#every-byte-answers-what-fired-never-what-is-true-now).
-
-  `FUNC_STATUS` on the STHS34PF80 is not clear-on-read: `tshock`, `mot` and
-  `pres` are level flags re-evaluated every ODR cycle, and only the `DRDY` bit
-  in `STATUS` (`0x23`) is cleared by being read.
 - **Presence and motion currently return the same value.** The STHS34PF80's filter
   bandwidths (`LPF_M`, `LPF_P`, `LPF_P_M`, `LPF_A_T`) are never configured, so they
   stay at their reset divider and the two algorithm outputs are the same signal.
@@ -994,11 +999,9 @@ Current firmware behaviour the master side should be aware of.
   of the sensor. With a low threshold that settling alone raises a presence
   event.
 
-  The walk starts with the algorithm reset, which zeroes the internal filters
-  and leaves them to charge up to the real signal level.
-  `sths34pf80_odr_set()` performs that reset itself — `odr_safe_set()` calls
-  `reset_algo_bit_set()` on every transition to an operative ODR — and
-  `IR_SENSOR_StartContinuous()` sets the ODR last, after every threshold write.
+  The walk starts with the algorithm reset that accompanies the transition into
+  continuous mode, which zeroes the internal filters and leaves them to charge
+  up to the real signal level.
 
   What sets the duration is the ODR. Every filter cutoff is a fraction of it,
   `ODR/9` at reset, and the sensor runs at **1 Hz** — a 0.11 Hz cutoff, so
@@ -1009,14 +1012,8 @@ Current firmware behaviour the master side should be aware of.
   same filter transient. Both runs of the measurement above showed it.
 - **The IR hysteresis registers are never written**, so hysteresis stays at the
   sensor default of 50 against a threshold of 1000 — a 5% band where ST pairs
-  50 with 200, a 25% one. The `INT` line follows the level, so a signal sitting
-  near the threshold makes the flag chatter and the line with it.
-- **`IR_SENSOR_StartContinuous()` ignores the return of `sths34pf80_odr_set()`,
-  which can fail silently.** That function clamps the ODR against the averaging
-  setting in `AVG_TRIM` — 1024 averages allows at most 1 Hz, 32 allows 30 Hz —
-  and returns −1 without writing anything when the request is too high. Raising
-  the ODR without checking can leave the sensor in power-down with no
-  indication.
+  50 with 200, a 25% one. A signal sitting near the threshold makes the flag
+  chatter.
 - **There is no `HAL_I2C_ErrorCallback`.** An I2C2 error is left to the stuck-bus
   watchdog above rather than being handled where it happens.
 - **`0x13 0x02` (configure IR) does nothing.** It returns `STATUS = 0x00` and
@@ -1041,9 +1038,9 @@ Current firmware behaviour the master side should be aware of.
   notifies the SOM immediately, but the FIFO is drained on the 100 ms main-loop
   cadence, so a read that arrives first returns what was captured up to the last
   drain.
-- **An IR event is reported before its sample is in RAM.** The same holds for
-  the infrared sensor on its 1 s main-loop cadence, so a `Read IR data` that
-  arrives first returns samples up to a second older than the event.
+  This does not apply to the infrared sensor: its flags and its sample are read
+  in the same interrupt service, so both are in RAM before the event reaches the
+  SOM.
 
 ## Compile Project
 
