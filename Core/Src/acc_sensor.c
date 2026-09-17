@@ -10,13 +10,15 @@
 extern I2C_HandleTypeDef hi2c1;
 // Static accelerometer object
 static ISM330DHCX_Object_t ism330dhcx;
+/* Wake-up threshold, 1 LSB = FS/64 = 31.25mg at 2g, so 125mg. Tested at 52Hz
+ * in low-power mode: a soft flick of the board fires it; at rest the slope
+ * never exceeds 14mg. */
 #define ACC_THS_DEFAULT  0x04
 #define ACC_I2C_TIMEOUT_MS   100U
 uint8_t acc_ths = ACC_THS_DEFAULT;
 
 /* Output data rate, base for batch rates. */
-// TODO: reduce to 52Hz
-#define ACC_ODR_HZ 416U
+#define ACC_ODR_HZ 52U
 
 /* accelerometer batch rate must follow ODR */
 #if ACC_ODR_HZ == 416U
@@ -82,18 +84,19 @@ static uint32_t acc_ts_scale = ACC_TS_SCALE_ONE;
 /* Restate an ISM330DHCX timestamp count on the MCU timebase, in 25us units,
  * against the pairing taken at the start of this drain.
  *
- * The multiply cannot overflow: the FIFO holds at most 438 entries whatever
- * the delay before a drain, so a count is at most some 37000 behind the
- * pairing, and the scale is clamped below 1.15. */
+ * The multiply is done in 64 bits. The FIFO holds at most 438 entries, which
+ * at 52Hz is some 7.5s of samples, so a count can be 300000 behind the
+ * pairing after a late drain; times a scale of up to 1.15 in Q16 that does
+ * not fit 32 bits. */
 static uint32_t ACC_DeviceToMcu(uint32_t count)
 {
     int32_t back = (int32_t)(acc_ts_pair_dev - count);
 
     /* a sample batched after the pairing was read sits ahead of it */
     if (back < 0)
-        return acc_ts_pair_mcu + (((uint32_t)-back * acc_ts_scale) >> 16);
+        return acc_ts_pair_mcu + (uint32_t)(((uint64_t)(uint32_t)-back * acc_ts_scale) >> 16);
 
-    return acc_ts_pair_mcu - (((uint32_t)back * acc_ts_scale) >> 16);
+    return acc_ts_pair_mcu - (uint32_t)(((uint64_t)(uint32_t)back * acc_ts_scale) >> 16);
 }
 
 /* Allocate circular buffer for samples. Enough for 250ms at ODR 416Hz or 2s at ODR 52Hz */
@@ -217,6 +220,10 @@ static int32_t ACC_GetTick(void)
     return (int32_t)HAL_GetTick();
 }
 
+/* init function return code helper */
+enum { ACC_INIT_STEP_BASE = __COUNTER__ };
+#define ACC_INIT_STEP (__COUNTER__ - ACC_INIT_STEP_BASE)
+
 /**
  * @brief Bring up the accelerometer and every event it should report.
  * @retval 0   every step succeeded
@@ -242,32 +249,26 @@ int ACC_Init(void) {
                                  sizeof(acc_motionsample_cbuf_stor));
 
     if (ISM330DHCX_RegisterBusIO(&ism330dhcx, &io_ctx) != ISM330DHCX_OK)
-        return 1;
+        return ACC_INIT_STEP;
 
     if (ISM330DHCX_Init(&ism330dhcx) != ISM330DHCX_OK)
-        return 2;
+        return ACC_INIT_STEP;
 
     // Enable accelerometer
     if (ISM330DHCX_ACC_Enable(&ism330dhcx) != ISM330DHCX_OK)
-        return 3;
-
-    // TODO: ism330dhcx_xl_power_mode_set(LOW_NORMAL_POWER_MD) for XL_HM_MODE=1 - 360uA -> 32uA
-    /* Every ISM330DHCX_ACC_Enable_*_Detection call below sets the ODR to
-     * 416 Hz itself, so this only holds until the first of them. */
-    if (ISM330DHCX_ACC_SetOutputDataRate(&ism330dhcx, (float)ACC_ODR_HZ) != ISM330DHCX_OK)
-        return 4;
+        return ACC_INIT_STEP;
 
     // Set full scale to 2g
     if (ISM330DHCX_ACC_SetFullScale(&ism330dhcx, 2) != ISM330DHCX_OK)
-        return 5;
+        return ACC_INIT_STEP;
 
     //Wake-up detection (movement above threshold)
     if (ISM330DHCX_ACC_Enable_Wake_Up_Detection(&ism330dhcx, ISM330DHCX_INT1_PIN) != ISM330DHCX_OK)
-        return 6;
+        return ACC_INIT_STEP;
 
-    // TODO: retune after changing ODR to 52Hz
+    /* threshold measured at 52Hz, see ACC_THS_DEFAULT */
     if (ISM330DHCX_ACC_Set_Wake_Up_Threshold(&ism330dhcx, acc_ths) != ISM330DHCX_OK)
-        return 7;
+        return ACC_INIT_STEP;
 
     /*
      * enable free-fall detection
@@ -277,23 +278,24 @@ int ACC_Init(void) {
      * - sets wake-up duration to 0
      */
     if (ISM330DHCX_ACC_Enable_Free_Fall_Detection(&ism330dhcx, ISM330DHCX_INT1_PIN) != ISM330DHCX_OK)
-        return 8;
+        return ACC_INIT_STEP;
 
     /* set intended minimum free-fall duration */
     if (ISM330DHCX_ACC_Set_Free_Fall_Duration(&ism330dhcx, ACC_FF_DURATION) != ISM330DHCX_OK)
-        return 9;
+        return ACC_INIT_STEP;
 
     /* set intended wake-up duration */
     if (ISM330DHCX_ACC_Set_Wake_Up_Duration(&ism330dhcx, ACC_WAKE_UP_DURATION) != ISM330DHCX_OK)
-        return 10;
+        return ACC_INIT_STEP;
 
     /* Tilt detection, an embedded function. The wake-up detector works on
      * the high-passed signal, so it sees change and not position: tilt the
      * board slowly and the orientation changes with no interrupt at all.
      * This function is built for exactly that case. */
-    // TODO: verify tilt after changing ODR to 52Hz
+    /* The algorithm runs at 26Hz and wants the ODR at or above that;
+     * verified firing at 52Hz in low-power mode. */
     if (ism330dhcx_tilt_sens_set(&ism330dhcx.Ctx, PROPERTY_ENABLE) != ISM330DHCX_OK)
-        return 11;
+        return ACC_INIT_STEP;
 
     /* An embedded function needs an init pulse as well as an enable - the
      * algorithm does not start on tilt_en alone. ST's driver exposes no
@@ -322,57 +324,72 @@ int ACC_Init(void) {
             r = -1;
 
         if (r != ISM330DHCX_OK)
-            return 12;
+            return ACC_INIT_STEP;
     }
 
     {
         ism330dhcx_pin_int1_route_t route;
 
         if (ism330dhcx_pin_int1_route_get(&ism330dhcx.Ctx, &route) != ISM330DHCX_OK)
-            return 13;
+            return ACC_INIT_STEP;
 
         route.emb_func_int1.int1_tilt = PROPERTY_ENABLE;
 
         if (ism330dhcx_pin_int1_route_set(&ism330dhcx.Ctx, &route) != ISM330DHCX_OK)
-            return 14;
+            return ACC_INIT_STEP;
     }
 
     /*Latch every interrupt, base functions and embedded alike, so an event
      * holds until it is read instead of self-clearing under the handler.
      */
     if (ism330dhcx_int_notification_set(&ism330dhcx.Ctx, ISM330DHCX_ALL_INT_LATCHED) != ISM330DHCX_OK)
-        return 15;
+        return ACC_INIT_STEP;
 
-    // TODO: re-assert ACC_ODR_HZ here - Enable_Wake_Up/Free_Fall_Detection each forced 416Hz
+    /* Low-power mode, XL_HM_MODE=1. The datasheet offers it for ODRs up to
+     * 52Hz, at a typical 32uA against 360uA in high-performance mode. The
+     * only cost is noise, 1.8mg RMS instead of the high-performance figure. */
+#if ACC_ODR_HZ > 52U
+#error "low-power mode is not available above 52Hz, drop the power mode setting"
+#endif
+    if (ism330dhcx_xl_power_mode_set(&ism330dhcx.Ctx, ISM330DHCX_LOW_NORMAL_POWER_MD) != ISM330DHCX_OK)
+        return ACC_INIT_STEP;
+
+    /* Set the output data rate last among the sensing settings:
+     * ISM330DHCX_ACC_Enable_Wake_Up_Detection() and
+     * ISM330DHCX_ACC_Enable_Free_Fall_Detection() above each force 416Hz, so
+     * setting it any earlier would not hold. The durations programmed above
+     * are sample counts already computed for this rate. */
+    if (ISM330DHCX_ACC_SetOutputDataRate(&ism330dhcx, (float)ACC_ODR_HZ) != ISM330DHCX_OK)
+        return ACC_INIT_STEP;
 
     /* enable timestamping on samples so movement can be reconstructed */
     /* nominal resolution 25us, INTERNAL_FREQ_FINE gives real figure */
     if (ism330dhcx_timestamp_set(&ism330dhcx.Ctx, PROPERTY_ENABLE) != ISM330DHCX_OK)
-        return 16;
+        return ACC_INIT_STEP;
 
     /* gyroscope not enabled, disable batching */
     if (ism330dhcx_fifo_gy_batch_set(&ism330dhcx.Ctx, ISM330DHCX_GY_NOT_BATCHED) != ISM330DHCX_OK)
-        return 17;
+        return ACC_INIT_STEP;
 
     /* set accelerometer batch rate (must match ODR) */
     if (ism330dhcx_fifo_xl_batch_set(&ism330dhcx.Ctx, ACC_BDR_SETTING) != ISM330DHCX_OK)
-        return 18;
+        return ACC_INIT_STEP;
 
     /* batch temperature readings at slowest (1.6Hz) rate */
     if (ism330dhcx_fifo_temp_batch_set(&ism330dhcx.Ctx, ISM330DHCX_TEMP_BATCHED_AT_1Hz6) != ISM330DHCX_OK)
-        return 19;
+        return ACC_INIT_STEP;
 
     /* generate timestamp every 8 samples, intermediate samples estimated by +=n/ODR */
     if (ism330dhcx_fifo_timestamp_decimation_set(&ism330dhcx.Ctx, ISM330DHCX_DEC_8) != ISM330DHCX_OK)
-        return 20;
+        return ACC_INIT_STEP;
 
     /* temporarily enable bypass mode to clear fifo */
     if (ism330dhcx_fifo_mode_set(&ism330dhcx.Ctx, ISM330DHCX_BYPASS_MODE) != ISM330DHCX_OK)
-        return 21;
+        return ACC_INIT_STEP;
 
     /* set fifo to continuous (stream) mode, discarding old samples automatically when full */
     if (ism330dhcx_fifo_mode_set(&ism330dhcx.Ctx, ISM330DHCX_STREAM_MODE) != ISM330DHCX_OK)
-        return 22;
+        return ACC_INIT_STEP;
 
     return 0;
 }

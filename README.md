@@ -118,18 +118,19 @@ All five bytes are accumulated latches, and the read clears them. Two sources
 firing between reads produce both bits rather than the last one: presence does not
 mask motion, and an accelerometer wake-up does not overwrite an earlier one.
 
-The reason the firmware cannot report present state is physical. Both sensors
-drive their INT pin as a **level**, not a pulse — `ALGO_CONFIG.INT_PULSED` is `0`
-on the STHS34PF80 — and the firmware watches only the rising edge. There is no
-falling-edge handler anywhere in the project. So a condition that stays asserted
-produces exactly one event, and once the master has consumed it there is no second
-edge and no way to ask whether it is still true. For present state, read the
-sensor's own value command instead: `0x12 0x02` returns live presence and motion
-counts.
+The reason is physical, and it differs between the two sensors. The
+accelerometer drives its INT pin as a **level**, and the firmware watches only
+the rising edge — there is no falling-edge handler anywhere in the project — so
+a condition that stays asserted produces exactly one event, and once the master
+has consumed it there is no second edge and no way to ask whether it is still
+true.
+
+The infrared sensor's flags are re-read once per second whatever the master
+does, so a held condition is reported again after every read of the interrupt
+status, and the read that reports nothing is what marks its end.
 
 The snapshot is taken with interrupts masked, so `data[0]` is exactly the OR of
-the sources at a single instant, and an edge that arrives during the read is
-reported on the next one rather than lost.
+the sources at a single instant.
 
 #### Why open drain, and why active low
 
@@ -294,7 +295,7 @@ Notes on individual commands:
   carries no interrupt information and clears none — that belongs to
   `Read interrupt status`.
 
-  The MCU reads one sample every second from the main loop, matching the
+  The MCU reads one sample per data-ready interrupt, one per second at the
   sensor's 1 Hz output data rate, so 30 samples is 30 s; older samples are
   overwritten. See [Infrared Sensor](#32-infrared-sensor-ir).
 - **Read ACC motion data** opens with a snapshot of the MCU timebase and then
@@ -351,8 +352,8 @@ Notes on individual commands:
   snapshot alone, not as an error.
 
   The MCU drains the sensor's FIFO every 100 ms from the main loop, so samples
-  accumulate continuously. The buffer holds 104 samples, 250 ms at the current
-  416 Hz output data rate; older samples are overwritten. See
+  accumulate continuously. The buffer holds 104 samples, 2 s at the 52 Hz
+  output data rate; older samples are overwritten. See
   [Accelerometer](#31-accelerometer).
 - **Read ACC temperature** returns the accelerometer's die temperature and the
   time it was captured:
@@ -710,10 +711,10 @@ and is reported to the master by `Read interrupt status`.
 
 Tilt answers to a **sustained** change of orientation, not a transient one:
 moving the board and returning it leaves the net orientation unchanged and
-reports nothing. Measured: taken from flat to its edge and left there, it
-reports the tilt bit on its own, with no motion bit.
+reports nothing. Taken from flat to its edge and left there, it reports the
+tilt bit on its own, with no motion bit.
 
-**Output data rate: 416 Hz**, set from `ACC_ODR_HZ`. Full scale ±2g.
+**Output data rate: 52 Hz**, in the sensor's low-power mode. Full scale ±2g.
 
 #### Sample capture
 
@@ -721,19 +722,19 @@ The sensor's own 3 kB FIFO batches accelerometer samples at the output data
 rate and the die temperature at 1.6 Hz, with a timestamp word every 8th
 sample. The MCU drains it into a 104-sample ring buffer **from the main loop**,
 every 100 ms, so samples accumulate continuously whether or not anything is
-moving; 104 samples is **250 ms** at 416 Hz. `Read ACC motion data` hands that
+moving; 104 samples is **2 s** at 52 Hz. `Read ACC motion data` hands that
 ring to the master and touches no bus.
 
 Samples are stamped on the MCU timebase as they leave the FIFO. The drain reads
-that timebase and the sensor's own timestamp counter back to back and adds the
-offset between them to every stamp it reconstructs.
+that timebase and the sensor's own timestamp counter back to back and rescales
+every stamp it reconstructs onto the MCU timebase. The stamps therefore report
+the sensor's actual rate, which its own oscillator puts a few percent above the
+nominal 52 Hz.
 
 Inside the device only every 8th sample carries a real timestamp; the seven in
-between are interpolated as `anchor + k/ODR`, 96 LSB apart at 416 Hz. Measured
-on hardware over an undisturbed 52-sample capture: every interval exactly 96
-LSB, contiguous across successive reads with no repeats. The sensor's FIFO
-discards its oldest entries once full, so a late drain loses samples and the
-gap falls between two records the master receives back to back.
+between are interpolated at the sample period, 769 LSB of 25 µs. The sensor's
+FIFO discards its oldest entries once full, so a late drain loses samples and
+the gap falls between two records the master receives back to back.
 
 Events in the accelerometer detail byte of `Read interrupt status`:
 
@@ -745,43 +746,22 @@ Events in the accelerometer detail byte of `Read interrupt status`:
 
 Which axis moved is not reported, and bit 3 upwards is unused: the device also
 reports the wake-up axes individually, a wake-up summary and activity-state
-changes, and none of those is configured well enough to act on.
-
-Two registers are read, not one: tilt is an embedded function and reports
-in its own status register. Neither is read through `ALL_INT_SRC`, because
-reading that register clears `WU_IA` before `WAKE_UP_SRC` can be read.
+changes, and none of those is reported.
 
 #### Tilt
 
-The wake-up detector runs on the high-passed signal, so it responds to
+The wake-up detector runs on the slope of the signal, so it responds to
 *change* and not to position: a slow tilt changes the orientation completely
 without crossing the wake-up threshold. Tilt detection covers that case.
 
-Enabling it takes two writes: `tilt_en` in `EMB_FUNC_EN_A` and `tilt_init` in
-`EMB_FUNC_INIT_A` (`0x66`). The algorithm does not start on the enable alone,
-and ST's driver exposes no setter for the init register, so the firmware writes
-it directly.
-
-The interrupt is latched with the base functions
-(`ISM330DHCX_ALL_INT_LATCHED`), so the status holds until the MCU reads it.
-That mode is set through the register layer rather than
-`ISM330DHCX_Set_Interrupt_Latch()`, whose `uint8_t` argument rejects anything
-above 1 and so cannot express it.
-
-Measured: a slow change to about 90°, held there, reports the tilt bit and no
-motion bit; a tilt that returns the board to where it started reports nothing;
-reading the status returns the bit once and `0x00` after, and later tilts still
-report.
+The interrupt is latched with the base functions, so the status holds until
+the MCU reads it. Reading the status returns the bit once and `0x00` after.
 
 #### Free-fall
 
-`ISM330DHCX_ACC_Enable_Free_Fall_Detection()` runs with the threshold at ST's
-312 mg and the duration at 15 samples, 36 ms at 416 Hz, from
-`ACC_FF_DURATION_MS`. ST's own default is 6 samples.
-
-`ff_ia` is reported as `0x04` and, like motion, triggers a FIFO drain.
-Measured: it sets when the board is lifted sharply, alongside the wake-up bits
-from the same movement. The threshold is untuned against a real fall.
+The threshold is 312 mg and the minimum duration 2 samples, 38 ms at 52 Hz.
+A drop of about 35 cm reports `0x04`, together with the motion bit from the
+landing.
 
 #### No sample read touches the bus
 
@@ -801,15 +781,14 @@ costs no extra bus transaction. It is reported **raw**, as
 [`Read ACC temperature`](#22-examples) describes: 256 LSB/°C with `0` meaning
 25 °C. The MCU does no conversion.
 
-It is the sensor's own die, not the air. Measured 49.0 °C against the
-STHS34PF80's ambient channel at 50.2 °C, which cross-checks both conversion
-formulas.
+It is the sensor's own die, not the air.
 
 `Toff` is untrimmed at **±15 °C** part to part, so this channel tracks
 *change* well and absolute temperature poorly. Use `Read IR data`'s ambient
 channel where the absolute number matters.
 
-Wake-up threshold: `ACC_THS_DEFAULT = 0x04`, set at build time.
+Wake-up threshold: 4 (125 mg), set at build time. A soft flick of the board
+fires it; at rest the slope stays below 14 mg.
 
 Trigger values: 0–63 (1 LSB = fraction of ±2g full scale)
 
@@ -837,13 +816,19 @@ Threshold (mg) = FS(g) × (threshold / 64) × 1000
 
 ### 3.2 Infrared Sensor (IR):
 
-Sensor: STHS34PF80 on I2C1, continuous mode at 1 Hz, presence and motion routed
-to a single interrupt line (`INT_OR`).
+Sensor: STHS34PF80 on I2C1, continuous mode at 1 Hz, with the `INT` line driven
+by **data ready** (`IEN = 01`) rather than by the presence and motion
+algorithms. Data ready is latched, and reading `FUNC_STATUS` clears it.
 
-The sensor has no FIFO, so the MCU reads one {presence, motion, tAmb} sample
-every second from the main loop into a 30-entry ring buffer, stamped on the MCU
-timebase as it is read. `Read IR data` hands that ring to the master and touches
-no bus.
+Servicing that interrupt reads `FUNC_STATUS` for the presence and motion flags
+and then one {presence, motion, tAmb} sample into a 30-entry ring buffer,
+stamped with the MCU tick at which the interrupt arrived. The sensor has no
+FIFO, so one interrupt carries one sample. `Read IR data` hands that ring to the
+master and touches no bus.
+
+An algorithm event cannot precede the sample it was computed from, so data ready
+covers both: `PRES_FLAG` and `MOT_FLAG` are threshold comparisons on `TPRESENCE`
+and `TMOTION`, which are members of the output set data ready announces.
 
 Interrupt code:
 
@@ -978,13 +963,11 @@ Current firmware behaviour the master side should be aware of.
 - **No UBX is parsed.** The firmware reads NMEA only, which means the receiver's
   `fullyResolved` / `confirmedTime` / `tAcc` indications are not available — see
   [Timekeeping](#25-timekeeping).
-- **The interrupt bytes report events, not present state**, and there is no
-  falling-edge handler, so the master is never told when a condition ends. See
+- **The interrupt bytes report events, not present state.** There is no
+  falling-edge handler, so the accelerometer never reports the end of a
+  condition. IR presence and motion are re-raised once per sample period for as
+  long as they are detected. See
   [Every byte answers "what fired", never "what is true now"](#every-byte-answers-what-fired-never-what-is-true-now).
-
-  `FUNC_STATUS` on the STHS34PF80 is not clear-on-read: `tshock`, `mot` and
-  `pres` are level flags re-evaluated every ODR cycle, and only the `DRDY` bit
-  in `STATUS` (`0x23`) is cleared by being read.
 - **Presence and motion currently return the same value.** The STHS34PF80's filter
   bandwidths (`LPF_M`, `LPF_P`, `LPF_P_M`, `LPF_A_T`) are never configured, so they
   stay at their reset divider and the two algorithm outputs are the same signal.
@@ -994,11 +977,9 @@ Current firmware behaviour the master side should be aware of.
   of the sensor. With a low threshold that settling alone raises a presence
   event.
 
-  The walk starts with the algorithm reset, which zeroes the internal filters
-  and leaves them to charge up to the real signal level.
-  `sths34pf80_odr_set()` performs that reset itself — `odr_safe_set()` calls
-  `reset_algo_bit_set()` on every transition to an operative ODR — and
-  `IR_SENSOR_StartContinuous()` sets the ODR last, after every threshold write.
+  The walk starts with the algorithm reset that accompanies the transition into
+  continuous mode, which zeroes the internal filters and leaves them to charge
+  up to the real signal level.
 
   What sets the duration is the ODR. Every filter cutoff is a fraction of it,
   `ODR/9` at reset, and the sensor runs at **1 Hz** — a 0.11 Hz cutoff, so
@@ -1009,14 +990,8 @@ Current firmware behaviour the master side should be aware of.
   same filter transient. Both runs of the measurement above showed it.
 - **The IR hysteresis registers are never written**, so hysteresis stays at the
   sensor default of 50 against a threshold of 1000 — a 5% band where ST pairs
-  50 with 200, a 25% one. The `INT` line follows the level, so a signal sitting
-  near the threshold makes the flag chatter and the line with it.
-- **`IR_SENSOR_StartContinuous()` ignores the return of `sths34pf80_odr_set()`,
-  which can fail silently.** That function clamps the ODR against the averaging
-  setting in `AVG_TRIM` — 1024 averages allows at most 1 Hz, 32 allows 30 Hz —
-  and returns −1 without writing anything when the request is too high. Raising
-  the ODR without checking can leave the sensor in power-down with no
-  indication.
+  50 with 200, a 25% one. A signal sitting near the threshold makes the flag
+  chatter.
 - **There is no `HAL_I2C_ErrorCallback`.** An I2C2 error is left to the stuck-bus
   watchdog above rather than being handled where it happens.
 - **`0x13 0x02` (configure IR) does nothing.** It returns `STATUS = 0x00` and
@@ -1027,23 +1002,19 @@ Current firmware behaviour the master side should be aware of.
   build time.
 - **`0x13 0x04` (configure GPS) does nothing.** It returns `STATUS = 0x00` and
   discards its payload.
-- **Free-fall fires, but the threshold is untuned against a real fall.** It has
-  been seen to set on a sharp lift by hand, which is not the same thing. See
-  [Free-fall](#free-fall).
 - **Some events the device reports are read and dropped.** The wake-up summary
   `wu_ia`, the individual `x_wu`/`y_wu`/`z_wu` axes, `sleep_change_ia` and the
   embedded functions other than tilt are all discarded rather than surfaced, so
   an event in one of those passes unnoticed.
-- **The sample buffer holds 250 ms at 416 Hz.** 104 samples is a fraction of a
-  captured event, so a master that polls slower than that loses motion. See
-  [Sample capture](#sample-capture).
+- **The sample buffer holds 2 s.** 104 samples at 52 Hz; a master that polls
+  slower than that loses motion. See [Sample capture](#sample-capture).
 - **A motion event is reported before its samples are in RAM.** The interrupt
   notifies the SOM immediately, but the FIFO is drained on the 100 ms main-loop
   cadence, so a read that arrives first returns what was captured up to the last
   drain.
-- **An IR event is reported before its sample is in RAM.** The same holds for
-  the infrared sensor on its 1 s main-loop cadence, so a `Read IR data` that
-  arrives first returns samples up to a second older than the event.
+  This does not apply to the infrared sensor: its flags and its sample are read
+  in the same interrupt service, so both are in RAM before the event reaches the
+  SOM.
 
 ## Compile Project
 
