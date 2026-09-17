@@ -115,6 +115,12 @@ _Static_assert(MCU_INFO_LEN <= I2C_RESP_MAX_PAYLOAD, "MCU_INFO_LEN > I2C_RESP_MA
 /* alarm configuration flags, byte 0 of the payload. */
 #define ALARM_FLAG_ARMED 0x01U
 
+/* IR configuration response, ir_config_t in wire order */
+#define IR_CONFIG_LEN sizeof(ir_config_t)
+
+/* ensure ir config data read size agrees with max payload size */
+_Static_assert(IR_CONFIG_LEN <= I2C_RESP_MAX_PAYLOAD, "IR_CONFIG_LEN > I2C_RESP_MAX_PAYLOAD");
+
 /* interrupt configuration payload,
  * {EN_SOURCES, PWR_SOURCES, EN_MCU, EN_IR, EN_ACC, EN_RTC} */
 #define INT_CONFIG_LEN 6U

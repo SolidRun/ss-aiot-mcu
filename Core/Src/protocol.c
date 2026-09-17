@@ -56,12 +56,18 @@ void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
     *status = 0;
 }
 
-/* 0x13 0x02 - placeholder. Accepts and discards its payload; the presence and
- * motion thresholds are fixed at IR_THS_DEFAULT. */
-void Sensor_IR_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *status){
-	(void)cmd_data;
-	(void)cmd_len;
-	*status = 0;
+/* 0x13 0x02 - report the IR sensor configuration, ir_config_t in wire order. */
+void Sensor_IR_Config(uint8_t *cmd_data, uint8_t cmd_len, uint8_t *data,
+                      uint8_t *len, uint8_t *status) {
+    /* ignore inputs, set not implemented */
+    (void)cmd_data;
+    (void)cmd_len;
+
+    /* struct is packed, read config directly into tx buffer */
+    IR_GetConfig((ir_config_t *)data);
+
+    *len = (uint8_t)IR_CONFIG_LEN;
+    *status = 0;
 }
 
 void Sensor_Accel_Motion_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
@@ -345,7 +351,7 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
         case CMD_SENSOR_CONFIG:
         	switch (cmd->sensor_id) {
         		case SENSOR_IR:
-        			Sensor_IR_Config(cmd->data, cmd->data_len, &resp->status);
+        			Sensor_IR_Config(cmd->data, cmd->data_len, resp->data, &resp->data_len, &resp->status);
         			break;
         		case SENSOR_ACCEL_MOTION:
         			Sensor_Accel_Config(cmd->data, cmd->data_len, &resp->status);

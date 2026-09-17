@@ -17,6 +17,10 @@ extern I2C_HandleTypeDef hi2c1;  // CubeMX I2C handle
 // Private variables
 //------------------------------------------------------------------------------
 static stmdev_ctx_t ir_sensor_ctx;
+/* Presence threshold in TOBJECT LSB, 2000 LSB per degC, so 0.1degC of change
+ * in what the field of view sees. ST's default; tested indoors: a hand over
+ * the sensor gives about 500, noise at rest stays under 10. */
+#define IR_THS_PRESENCE 200U
 #define IR_THS_DEFAULT  1000U
 #define IR_I2C_TIMEOUT_MS   100U
 uint16_t ir_ths = IR_THS_DEFAULT;
@@ -35,11 +39,14 @@ static uint32_t IR_TicksTo25us(uint32_t ticks)
     return ((ticks >> 6) * 625U) + (((ticks & 0x3FU) * 625U) >> 6);
 }
 
-/* Allocate circular buffer for samples. Enough for 1s at ODR 30Hz or 30s at ODR 1Hz. */
-#define IR_SAMPLE_BUF_SIZE 30U
+/* Allocate circular buffer for samples. Enough for 2s at ODR 30Hz or 1m at ODR 1Hz. */
+#define IR_SAMPLE_BUF_SIZE 60U
 static cbuf_handle_t ir_sample_cbuf;
 static struct circular_buf_t ir_sample_cbuf_priv;
 static uint8_t ir_sample_cbuf_stor[IR_SAMPLE_BUF_SIZE * sizeof(ir_sample_t)];
+
+/* active configuration */
+static ir_config_t ir_config;
 
 //------------------------------------------------------------------------------
 // Private functions
@@ -75,6 +82,7 @@ int IR_SENSOR_Init(void)
         .pin = STHS34PF80_PUSH_PULL,
         .polarity = STHS34PF80_ACTIVE_HIGH,
     };
+    uint16_t sens;
 
     /* initialise samples buffer tracking structures (can't fail, do early) */
     ir_sample_cbuf = circular_buf_init(&ir_sample_cbuf_priv, ir_sample_cbuf_stor, sizeof(ir_sample_cbuf_stor));
@@ -85,6 +93,24 @@ int IR_SENSOR_Init(void)
     ir_sensor_ctx.handle    = &hi2c1;  // I2C handle from CubeMX
     ir_sensor_ctx.mdelay    = HAL_Delay;
 
+    /* clear active config flags */
+    ir_config.flags = 0;
+
+    /* power-down sensor before config, in case of mcu restart */
+    if (sths34pf80_odr_set(&ir_sensor_ctx, STHS34PF80_ODR_OFF) != 0)
+        return IR_INIT_STEP;
+
+    /* set gain mode */
+    if (sths34pf80_gain_mode_set(&ir_sensor_ctx, STHS34PF80_GAIN_DEFAULT_MODE) != 0)
+        return IR_INIT_STEP;
+    ir_config.flags &= ~IR_CFG_FLAG_WIDE_MODE;
+
+    /* factory sensitivity, SENS_DATA * 16 + 2048 LSB/degC in default gain mode */
+    if (sths34pf80_tobject_sensitivity_get(&ir_sensor_ctx, &sens) != 0)
+        return IR_INIT_STEP;
+    /* store sensitivity value in 16LSB/deg to fit uint8 */
+    ir_config.sensitivity = (uint8_t)(sens / 16U);
+
     if (sths34pf80_int_mode_set(&ir_sensor_ctx, int_mode_cfg) != 0)
         return IR_INIT_STEP;
 
@@ -92,7 +118,7 @@ int IR_SENSOR_Init(void)
     if (sths34pf80_int_or_set(&ir_sensor_ctx, STHS34PF80_INT_MOTION_PRESENCE) != 0)
         return IR_INIT_STEP;
 
-    if (sths34pf80_presence_threshold_set(&ir_sensor_ctx, ir_ths) != 0)
+    if (sths34pf80_presence_threshold_set(&ir_sensor_ctx, IR_THS_PRESENCE) != 0)
         return IR_INIT_STEP;
 
     if (sths34pf80_motion_threshold_set(&ir_sensor_ctx, ir_ths) != 0)
@@ -116,8 +142,12 @@ int IR_SENSOR_Init(void)
     if (sths34pf80_block_data_update_set(&ir_sensor_ctx, PROPERTY_ENABLE) != 0)
         return IR_INIT_STEP;
 
+    /* set averaging rate to 32 (noise 25rms/LSB, consumes 31uA at 8Hz ODR) */
+    if (sths34pf80_avg_tobject_num_set(&ir_sensor_ctx, STHS34PF80_AVG_TMOS_32) != 0)
+        return IR_INIT_STEP;
+
     /* set odr, implicitly starts sampling in continuous mode */
-    if (sths34pf80_odr_set(&ir_sensor_ctx, STHS34PF80_ODR_AT_1Hz) != 0)
+    if (sths34pf80_odr_set(&ir_sensor_ctx, STHS34PF80_ODR_AT_8Hz) != 0)
         return IR_INIT_STEP;
 
     return 0;
@@ -179,6 +209,11 @@ int IR_SENSOR_ReadTAmbShock(int16_t *value)
     return sths34pf80_tamb_shock_raw_get(&ir_sensor_ctx, value);
 }
 
+void IR_GetConfig(ir_config_t *const dst)
+{
+    *dst = ir_config;
+}
+
 /* Append one sample to the buffer, discards oldest when full.
  *
  * Masked for the same reason as the accelerometer's push. See
@@ -232,7 +267,7 @@ uint32_t IR_TimestampNow(void)
 static int IR_ReadSample(uint32_t tick)
 {
     ir_sample_t smp;
-    int16_t presence, motion, tambient;
+    int16_t presence, motion, tambient, tobject;
 
     smp.timestamp = IR_TicksTo25us(tick);
 
@@ -246,9 +281,13 @@ static int IR_ReadSample(uint32_t tick)
     if (IR_SENSOR_ReadTAmbient(&tambient) != 0)
         return -1;
 
+    if (IR_SENSOR_ReadTObject(&tobject) != 0)
+        return -1;
+
     smp.presence = presence;
     smp.motion   = motion;
     smp.tambient = tambient;
+    smp.tobject  = tobject;
 
     IR_SamplePush(&smp);
 

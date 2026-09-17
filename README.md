@@ -125,9 +125,10 @@ a condition that stays asserted produces exactly one event, and once the master
 has consumed it there is no second edge and no way to ask whether it is still
 true.
 
-The infrared sensor's flags are re-read once per second whatever the master
-does, so a held condition is reported again after every read of the interrupt
-status, and the read that reports nothing is what marks its end.
+The infrared sensor's flags are re-read with every sample, eight times a
+second, whatever the master does, so a held condition is reported again after
+every read of the interrupt status, and the read that reports nothing is what
+marks its end.
 
 The snapshot is taken with interrupts masked, so `data[0]` is exactly the OR of
 the sources at a single instant.
@@ -234,8 +235,8 @@ Multi-byte values are little-endian unless stated otherwise.
 | Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
 | Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
-| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb)}}, N = 0..5 |
-| Read IR config                 | {0x13,0x02,0x00,{}}     | {0x00,0x00,{}} — placeholder, no configuration |
+| Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×12,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb, int16 tObj)}}, N = 0..5 |
+| Read IR config                 | {0x13,0x02,0x00,{}}     | {0x00,2,{FLAGS, SENSITIVITY}}              |
 | Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..8 |
 | Read ACC temperature           | {0x12,0x0A,0x00,{}}     | {0x00,4+6×N,{uint32 now, N × (uint32 timestamp, int16 temp)}}, N = 0..1 |
 | Read ACC config                | {0x13,0x03,0x00,{}}     | {0x00,0x00,{}} — placeholder, no configuration |
@@ -274,10 +275,18 @@ Notes on individual commands:
   did not produce, and `FLAGS` cannot be trusted either.
 
   `STATUS` is always `0x00`.
-- **Read IR config** is a placeholder. There is no configuration to report, and
-  a payload sent to set one is discarded.
+- **Read IR config** reports the sensor's fixed configuration; a payload sent
+  to set one is discarded:
+
+  | Byte | Field | Encoding |
+  |------|-------|----------|
+  | 0 | FLAGS | bit 0: wide gain mode, `tObj` and SENSITIVITY are one eighth of their default gain mode values. Always 0 today |
+  | 1 | SENSITIVITY | uint8, `tObj` sensitivity in units of 16 LSB/°C, factory calibrated per unit; 128 is 2048 LSB/°C |
+
+  `tObj` in °C is `tObj / (SENSITIVITY × 16)`, divided by a further 8 when the
+  wide mode flag is set.
 - **Read IR data** opens with a snapshot of the MCU timebase and then hands out
-  captured samples, oldest first, as fixed 10-byte records with no padding:
+  captured samples, oldest first, as fixed 12-byte records with no padding:
 
   | Byte | Field | Encoding |
   |------|-------|----------|
@@ -286,17 +295,18 @@ Notes on individual commands:
   | 8-9  | presence | int16, raw algorithm output |
   | 10-11 | motion | int16, raw algorithm output |
   | 12-13 | tAmb | int16, ambient temperature, hundredths of °C |
-  | 14.. | | further samples, 10 bytes each |
+  | 14-15 | tObj | int16, object temperature, raw; scale with `Read IR config` |
+  | 16.. | | further samples, 12 bytes each |
 
-  `DATA_LEN` is `4 + N*10`, from `4` to `54` — so `(DATA_LEN - 4) / 10` gives
+  `DATA_LEN` is `4 + N*12`, from `4` to `64` — so `(DATA_LEN - 4) / 12` gives
   the number of samples. Timestamps follow the same rule as the accelerometer's, and `now` is present even when no samples are waiting.
 
-  **The read consumes what it returns**, and the buffer holds 30 samples. It
+  **The read consumes what it returns**, and the buffer holds 60 samples. It
   carries no interrupt information and clears none — that belongs to
   `Read interrupt status`.
 
-  The MCU reads one sample per data-ready interrupt, one per second at the
-  sensor's 1 Hz output data rate, so 30 samples is 30 s; older samples are
+  The MCU reads one sample per data-ready interrupt, eight per second at the
+  sensor's 8 Hz output data rate, so 60 samples is 7.5 s; older samples are
   overwritten. See [Infrared Sensor](#32-infrared-sensor-ir).
 - **Read ACC motion data** opens with a snapshot of the MCU timebase and then
   hands out captured samples, oldest first, as fixed 10-byte records with no
@@ -478,7 +488,8 @@ Total bytes the master should read (`2 + DATA_LEN`):
 | `0x10` / `0x11` (LED on/off) | 2 | immediate |
 | `0x12,0x0B` (MCU info) | 8 | immediate |
 | `0x12,0x01` (LED status) | 3 | immediate |
-| `0x12,0x02` (IR data) | 56 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
+| `0x12,0x02` (IR data) | 66 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
+| `0x13,0x02` (IR config) | 4 | immediate |
 | `0x12,0x03` (ACC motion data) | 86 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
 | `0x12,0x0A` (ACC temperature) | 12 | immediate — served from RAM, no bus access |
 | `0x12,0x04` (GPS data) | 34 — always | immediate — a copy out of RAM, no bus access |
@@ -816,12 +827,17 @@ Threshold (mg) = FS(g) × (threshold / 64) × 1000
 
 ### 3.2 Infrared Sensor (IR):
 
-Sensor: STHS34PF80 on I2C1, continuous mode at 1 Hz, with the `INT` line driven
-by **data ready** (`IEN = 01`) rather than by the presence and motion
-algorithms. Data ready is latched, and reading `FUNC_STATUS` clears it.
+Sensor: STHS34PF80 on I2C1, continuous mode at 8 Hz with 32 averages per
+object sample, in the default gain mode. The `INT` line is driven by **data
+ready** (`IEN = 01`) rather than by the presence and motion algorithms. Data
+ready is latched, and reading `FUNC_STATUS` clears it.
 
-Servicing that interrupt reads `FUNC_STATUS` for the presence and motion flags
-and then one {presence, motion, tAmb} sample into a 30-entry ring buffer,
+At init the sensor is put into power-down before it is configured — it is not
+reset with the MCU and may still be sampling from before — and its factory
+object sensitivity is read once for `Read IR config`.
+
+Servicing the interrupt reads `FUNC_STATUS` for the presence and motion flags
+and then one {presence, motion, tAmb, tObj} sample into a 60-entry ring buffer,
 stamped with the MCU tick at which the interrupt arrived. The sensor has no
 FIFO, so one interrupt carries one sample. `Read IR data` hands that ring to the
 master and touches no bus.
@@ -837,19 +853,19 @@ Interrupt code:
 | 0x01 | `FUNC_STATUS.mot_flag` | motion |
 | 0x02 | `FUNC_STATUS.pres_flag` | presence |
 
-`Read IR data` also returns the sensor's own ambient channel, in hundredths
-of a degree Celsius. Sensitivity is 100 LSB/°C, so the raw register value
-already is hundredths and is passed straight through. Like the
-accelerometer's, this reads the sensor's own package rather than the air —
-the two are a cross-check on each other's scaling, not two measurements of
-room temperature. `IR_SENSOR_ReadTObject()` and `IR_SENSOR_ReadTAmbShock()`
-exist in the firmware and still have no command.
+`Read IR data` returns two temperature channels. `tAmb` is the sensor's own
+package temperature from a contact sensor, in hundredths of a degree Celsius:
+sensitivity is 100 LSB/°C, so the raw register value is passed straight
+through. `tObj` is the infrared measurement, the thermopile output presence
+and motion are computed from, passed through raw; `Read IR config` carries the
+factory sensitivity that converts it. Thermal shock is not reported.
 
-Frequency [Hz]= 1Hz = 1000ms
+Output data rate: 8 Hz, 125 ms per sample.
 
 Hysteresis default: **HYST = 50** (the datasheet writes it as `32h`)
 
-Sensor sensitivity: 2000 LSB/°C, so 1 LSB of threshold ≈ 0.0005 °C.
+Sensor sensitivity: 2000 LSB/°C nominal, so 1 LSB of threshold ≈ 0.0005 °C;
+the per-unit factory value is what `Read IR config` reports.
 
 Detection:
 
@@ -868,20 +884,14 @@ Flag cleared when signal < (threshold − hysteresis)
 | 300       | 50         | ≥0.15°C             | Low sensitivity, short range      |
 | 400       | 50         | ≥0.2°C              | Minimal sensitivity, very stable  |
 
-> **The firmware uses `IR_THS_DEFAULT = 1000` (≈0.5 °C), set at build time and
-> outside the table above.** 1000 is the value the board has been running. The
-> 100–400 range in the table comes from the sensor sensitivity figure and has not
-> been validated on this hardware. Treat the table as a starting point for
-> tuning, not as tested settings.
->
-> The firmware never writes the hysteresis registers, so hysteresis stays at the
-> sensor default of 50. Note that ST pairs 50 with a threshold of 200 — a ratio of
-> 25%. Against the firmware's 1000 the ratio is 5%, which leaves only a narrow band
-> (flag sets at 1000, clears at 950) and can make the flag chatter when the signal
-> settles near the threshold. If 1000 is kept, a hysteresis around 250 restores
-> ST's ratio.
+The firmware sets the presence threshold to **200** (≈0.1 °C), ST's default,
+and the motion threshold to **1000** (≈0.5 °C), both at build time. Tested
+indoors at 8 Hz: a hand 10 cm above the sensor drives presence to about 8600;
+the board at rest wanders within ±170.
 
-Both `PRESENCE_THS` and `MOTION_THS` are written with the same value.
+The hysteresis registers are not written, so hysteresis stays at the sensor
+default of 50: a flag sets at its threshold and clears 50 below it. ST pairs
+50 with 200; against 1000 it is a 5% band.
 
 
 ### 3.3 Battery Charging:
@@ -965,38 +975,31 @@ Current firmware behaviour the master side should be aware of.
   [Timekeeping](#25-timekeeping).
 - **The interrupt bytes report events, not present state.** There is no
   falling-edge handler, so the accelerometer never reports the end of a
-  condition. IR presence and motion are re-raised once per sample period for as
-  long as they are detected. See
+  condition. IR presence and motion are re-raised once per sample period, eight
+  times a second, for as long as they are detected. See
   [Every byte answers "what fired", never "what is true now"](#every-byte-answers-what-fired-never-what-is-true-now).
 - **Presence and motion currently return the same value.** The STHS34PF80's filter
   bandwidths (`LPF_M`, `LPF_P`, `LPF_P_M`, `LPF_A_T`) are never configured, so they
   stay at their reset divider and the two algorithm outputs are the same signal.
   Motion therefore responds to slow changes that a motion detector should ignore.
-- **The IR baseline walks for about twenty seconds after a reset.** Measured:
-  presence climbed monotonically from −856 to +235 with nothing moving in front
-  of the sensor. With a low threshold that settling alone raises a presence
-  event.
-
-  The walk starts with the algorithm reset that accompanies the transition into
-  continuous mode, which zeroes the internal filters and leaves them to charge
-  up to the real signal level.
-
-  What sets the duration is the ODR. Every filter cutoff is a fraction of it,
-  `ODR/9` at reset, and the sensor runs at **1 Hz** — a 0.11 Hz cutoff, so
-  seconds per time constant. At 30 Hz the same settling would take under a
-  second. The same 1 Hz also means a person walking past is one or two samples,
-  which is why only something held in front of the sensor moves the numbers.
-- **Expect a spurious motion event about a second after every MCU reset**, from the
-  same filter transient. Both runs of the measurement above showed it.
+- **A heat source already in view when the firmware starts is never reported
+  as presence.** The detectors take the scene at start-up as their baseline,
+  so that first object raises no presence event for as long as it stays. Its
+  departure raises a motion event, and from then on the sensor works normally:
+  the next heat source to enter the field of view is reported. This also
+  applies after an MCU restart.
+- **Presence and motion build up an offset while the board warms after a cold
+  start**, positive with rising temperature, and it decays within about twenty
+  seconds once the temperature is steady.
 - **The IR hysteresis registers are never written**, so hysteresis stays at the
-  sensor default of 50 against a threshold of 1000 — a 5% band where ST pairs
-  50 with 200, a 25% one. A signal sitting near the threshold makes the flag
-  chatter.
+  sensor default of 50. For presence that is ST's pairing with 200; for motion
+  it is a 5% band against 1000, and a signal sitting near that threshold makes
+  the flag chatter.
 - **There is no `HAL_I2C_ErrorCallback`.** An I2C2 error is left to the stuck-bus
   watchdog above rather than being handled where it happens.
-- **`0x13 0x02` (configure IR) does nothing.** It returns `STATUS = 0x00` and
-  discards its payload. The presence and motion thresholds are fixed at build
-  time.
+- **`0x13 0x02` (configure IR) accepts no configuration.** It discards its
+  payload and reports the fixed configuration. The presence and motion
+  thresholds are fixed at build time.
 - **`0x13 0x03` (configure accelerometer) does nothing.** It returns
   `STATUS = 0x00` and discards its payload. The wake-up threshold is fixed at
   build time.
