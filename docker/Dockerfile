@@ -53,13 +53,12 @@ RUN --mount=type=bind,target=/ctx set -e; \
 COPY headless-cubemx.sh /usr/local/bin/headless-cubemx.sh
 RUN chmod 0755 /usr/local/bin/headless-cubemx.sh
 
-RUN locale-gen en_US.UTF-8
 RUN update-ca-certificates
 
 # Set environment variables
-ENV LANG=en_US.UTF-8 \
+ENV LANG=C.UTF-8 \
     LANGUAGE=en_US:en \
-    LC_ALL=en_US.UTF-8 \
+    LC_ALL=C.UTF-8 \
     PATH="/opt/stm32cubeide:${PATH}"
 
 # Arguments to pass host user's UID and GID
