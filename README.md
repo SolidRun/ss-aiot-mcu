@@ -352,8 +352,8 @@ Notes on individual commands:
   snapshot alone, not as an error.
 
   The MCU drains the sensor's FIFO every 100 ms from the main loop, so samples
-  accumulate continuously. The buffer holds 104 samples, 250 ms at the current
-  416 Hz output data rate; older samples are overwritten. See
+  accumulate continuously. The buffer holds 104 samples, 2 s at the 52 Hz
+  output data rate; older samples are overwritten. See
   [Accelerometer](#31-accelerometer).
 - **Read ACC temperature** returns the accelerometer's die temperature and the
   time it was captured:
@@ -711,10 +711,10 @@ and is reported to the master by `Read interrupt status`.
 
 Tilt answers to a **sustained** change of orientation, not a transient one:
 moving the board and returning it leaves the net orientation unchanged and
-reports nothing. Measured: taken from flat to its edge and left there, it
-reports the tilt bit on its own, with no motion bit.
+reports nothing. Taken from flat to its edge and left there, it reports the
+tilt bit on its own, with no motion bit.
 
-**Output data rate: 416 Hz**, set from `ACC_ODR_HZ`. Full scale ±2g.
+**Output data rate: 52 Hz**, in the sensor's low-power mode. Full scale ±2g.
 
 #### Sample capture
 
@@ -722,19 +722,19 @@ The sensor's own 3 kB FIFO batches accelerometer samples at the output data
 rate and the die temperature at 1.6 Hz, with a timestamp word every 8th
 sample. The MCU drains it into a 104-sample ring buffer **from the main loop**,
 every 100 ms, so samples accumulate continuously whether or not anything is
-moving; 104 samples is **250 ms** at 416 Hz. `Read ACC motion data` hands that
+moving; 104 samples is **2 s** at 52 Hz. `Read ACC motion data` hands that
 ring to the master and touches no bus.
 
 Samples are stamped on the MCU timebase as they leave the FIFO. The drain reads
-that timebase and the sensor's own timestamp counter back to back and adds the
-offset between them to every stamp it reconstructs.
+that timebase and the sensor's own timestamp counter back to back and rescales
+every stamp it reconstructs onto the MCU timebase. The stamps therefore report
+the sensor's actual rate, which its own oscillator puts a few percent above the
+nominal 52 Hz.
 
 Inside the device only every 8th sample carries a real timestamp; the seven in
-between are interpolated as `anchor + k/ODR`, 96 LSB apart at 416 Hz. Measured
-on hardware over an undisturbed 52-sample capture: every interval exactly 96
-LSB, contiguous across successive reads with no repeats. The sensor's FIFO
-discards its oldest entries once full, so a late drain loses samples and the
-gap falls between two records the master receives back to back.
+between are interpolated at the sample period, 769 LSB of 25 µs. The sensor's
+FIFO discards its oldest entries once full, so a late drain loses samples and
+the gap falls between two records the master receives back to back.
 
 Events in the accelerometer detail byte of `Read interrupt status`:
 
@@ -746,43 +746,22 @@ Events in the accelerometer detail byte of `Read interrupt status`:
 
 Which axis moved is not reported, and bit 3 upwards is unused: the device also
 reports the wake-up axes individually, a wake-up summary and activity-state
-changes, and none of those is configured well enough to act on.
-
-Two registers are read, not one: tilt is an embedded function and reports
-in its own status register. Neither is read through `ALL_INT_SRC`, because
-reading that register clears `WU_IA` before `WAKE_UP_SRC` can be read.
+changes, and none of those is reported.
 
 #### Tilt
 
-The wake-up detector runs on the high-passed signal, so it responds to
+The wake-up detector runs on the slope of the signal, so it responds to
 *change* and not to position: a slow tilt changes the orientation completely
 without crossing the wake-up threshold. Tilt detection covers that case.
 
-Enabling it takes two writes: `tilt_en` in `EMB_FUNC_EN_A` and `tilt_init` in
-`EMB_FUNC_INIT_A` (`0x66`). The algorithm does not start on the enable alone,
-and ST's driver exposes no setter for the init register, so the firmware writes
-it directly.
-
-The interrupt is latched with the base functions
-(`ISM330DHCX_ALL_INT_LATCHED`), so the status holds until the MCU reads it.
-That mode is set through the register layer rather than
-`ISM330DHCX_Set_Interrupt_Latch()`, whose `uint8_t` argument rejects anything
-above 1 and so cannot express it.
-
-Measured: a slow change to about 90°, held there, reports the tilt bit and no
-motion bit; a tilt that returns the board to where it started reports nothing;
-reading the status returns the bit once and `0x00` after, and later tilts still
-report.
+The interrupt is latched with the base functions, so the status holds until
+the MCU reads it. Reading the status returns the bit once and `0x00` after.
 
 #### Free-fall
 
-`ISM330DHCX_ACC_Enable_Free_Fall_Detection()` runs with the threshold at ST's
-312 mg and the duration at 15 samples, 36 ms at 416 Hz, from
-`ACC_FF_DURATION_MS`. ST's own default is 6 samples.
-
-`ff_ia` is reported as `0x04` and, like motion, triggers a FIFO drain.
-Measured: it sets when the board is lifted sharply, alongside the wake-up bits
-from the same movement. The threshold is untuned against a real fall.
+The threshold is 312 mg and the minimum duration 2 samples, 38 ms at 52 Hz.
+A drop of about 35 cm reports `0x04`, together with the motion bit from the
+landing.
 
 #### No sample read touches the bus
 
@@ -802,15 +781,14 @@ costs no extra bus transaction. It is reported **raw**, as
 [`Read ACC temperature`](#22-examples) describes: 256 LSB/°C with `0` meaning
 25 °C. The MCU does no conversion.
 
-It is the sensor's own die, not the air. Measured 49.0 °C against the
-STHS34PF80's ambient channel at 50.2 °C, which cross-checks both conversion
-formulas.
+It is the sensor's own die, not the air.
 
 `Toff` is untrimmed at **±15 °C** part to part, so this channel tracks
 *change* well and absolute temperature poorly. Use `Read IR data`'s ambient
 channel where the absolute number matters.
 
-Wake-up threshold: `ACC_THS_DEFAULT = 0x04`, set at build time.
+Wake-up threshold: 4 (125 mg), set at build time. A soft flick of the board
+fires it; at rest the slope stays below 14 mg.
 
 Trigger values: 0–63 (1 LSB = fraction of ±2g full scale)
 
@@ -1024,16 +1002,12 @@ Current firmware behaviour the master side should be aware of.
   build time.
 - **`0x13 0x04` (configure GPS) does nothing.** It returns `STATUS = 0x00` and
   discards its payload.
-- **Free-fall fires, but the threshold is untuned against a real fall.** It has
-  been seen to set on a sharp lift by hand, which is not the same thing. See
-  [Free-fall](#free-fall).
 - **Some events the device reports are read and dropped.** The wake-up summary
   `wu_ia`, the individual `x_wu`/`y_wu`/`z_wu` axes, `sleep_change_ia` and the
   embedded functions other than tilt are all discarded rather than surfaced, so
   an event in one of those passes unnoticed.
-- **The sample buffer holds 250 ms at 416 Hz.** 104 samples is a fraction of a
-  captured event, so a master that polls slower than that loses motion. See
-  [Sample capture](#sample-capture).
+- **The sample buffer holds 2 s.** 104 samples at 52 Hz; a master that polls
+  slower than that loses motion. See [Sample capture](#sample-capture).
 - **A motion event is reported before its samples are in RAM.** The interrupt
   notifies the SOM immediately, but the FIFO is drained on the 100 ms main-loop
   cadence, so a read that arrives first returns what was captured up to the last
