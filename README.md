@@ -84,10 +84,10 @@ Neither device offers a `raw` attribute. The controller serves samples from a
 queue that is consumed by being read, so there is no current value to hand out
 one at a time - read from the buffer instead. Ensure to pass buffer size 8,
 this is the maximum samples returned in a single i2c transaction - otherwise
-samples might be lost:
+samples might be lost. Reading 104 samples drains the controller buffer once:
 
 ```sh
-iio_readdev -b 8 -s 52 ssaiot-sc-accel > motion.bin
+iio_readdev -b 8 -s 104 ssaiot-sc-accel > motion.bin
 ```
 
 Apply `scale`, and for temperature `offset` as well, to interpret the result:
@@ -112,27 +112,55 @@ The controller runs its own motion, tilt and free-fall detectors and reports eac
 as an IIO event on `ssaiot-sc-accel`. They sit on event-only channels, so they
 never appear in the buffer:
 
-| Detector | Enable attribute |
-|----------|------------------|
-| Motion | <code>n_accel_x\|y\|z_mag_adaptive_rising_en</code> |
-| Tilt | `in_incli_change_either_en` |
-| Free-fall | `in_accel_x&y&z_mag_falling_en` |
+| Detector | Enable attribute | Interrupt |
+|----------|------------------|-----------|
+| Motion | <code>in_accel_x\|y\|z_mag_adaptive_rising_en</code> | `motion` |
+| Tilt | `in_incli_change_either_en` | `tilt` |
+| Free-fall | `in_accel_x&y&z_mag_falling_en` | `freefall` |
 
-Enabling an attribute only gates delivery to userspace. The detectors are
-configured by controller firmware and run either way.
+The detectors are configured by controller firmware and run either way.
+Enabling an attribute unmasks the detector in the controller, which neither
+latches nor reports a masked one. Every detector starts disabled, so nothing is
+delivered, not even an interrupt, until it is switched on.
+
+##### Enabling in sysfs
+
+libIIO cannot reach event attributes (see below), so write them directly. Find
+the device first, as the `iio:deviceN` number follows probe order:
+
+```sh
+dev=$(dirname $(grep -l '^ssaiot-sc-accel$' /sys/bus/iio/devices/iio:device*/name))
+```
+
+Then switch the detectors on, each on its own. Two of the names contain `|` and
+`&`, which a shell reads as operators unless the path is quoted:
+
+```sh
+echo 1 > "$dev/events/in_accel_x|y|z_mag_adaptive_rising_en"
+echo 1 > "$dev/events/in_incli_change_either_en"
+echo 1 > "$dev/events/in_accel_x&y&z_mag_falling_en"
+```
+
+Read them back to confirm:
+
+```sh
+grep -H . "$dev"/events/*
+```
+
+Writing `0` masks a detector in the controller again.
 
 ##### Detection, with no tooling
 
-The interrupt counters advance on every detection whether or not userspace
-enabled the event, so this alone shows the controller firing and the
-demultiplexer routing each detector to its own source:
+An enabled detector advances its interrupt counter on every detection, which
+shows the controller firing and the demultiplexer routing each detector to its
+own source:
 
 ```sh
 grep -E 'motion|tilt|freefall' /proc/interrupts
 ```
 
 Move, tilt or drop the board, run it again, and the matching counter has
-stepped.
+stepped. A counter that never moves means its event attribute is still `0`.
 
 ##### Detection with libIIO
 
@@ -165,10 +193,11 @@ There is no `raw` attribute. The controller serves readings from a queue that is
 consumed by being read, so there is no current value to hand out one at a time.
 All three arrive together in one record, so they always scan together and the
 sample layout is fixed. Ensure to pass buffer size 5, this is the maximum samples
-returned in a single i2c transaction - otherwise samples might be lost:
+returned in a single i2c transaction - otherwise samples might be lost.
+Reading 60 samples drains the controller buffer once:
 
 ```sh
-iio_readdev -b 5 -s 30 ssaiot-sc-ir > ir.bin
+iio_readdev -b 5 -s 60 ssaiot-sc-ir > ir.bin
 ```
 
 At a low output data rate the libiio tools give up before the buffer fills.
@@ -219,27 +248,51 @@ The controller runs the sensor's own presence and motion detectors and reports
 each as an IIO event. A detector compares one of the buffered signals against a
 threshold, so its events belong to that same channel:
 
-| Detector | Channel | Enable attribute |
-|----------|---------|------------------|
-| Presence | `proximity0` | `in_proximity0_thresh_rising_en` |
-| Motion | `proximity1` | `in_proximity1_thresh_rising_en` |
+| Detector | Channel | Enable attribute | Interrupt |
+|----------|---------|------------------|-----------|
+| Presence | `proximity0` | `in_proximity0_thresh_rising_en` | `presence` |
+| Motion | `proximity1` | `in_proximity1_thresh_rising_en` | `activity` |
 
-Enabling an attribute only gates delivery to userspace. The detectors run either
-way, and their thresholds are set in controller firmware - there is no command
-to change them, so no `_value` attribute is offered.
+The detectors run either way, and their thresholds are set in controller
+firmware - there is no command to change them, so no `_value` attribute is
+offered. Enabling an attribute unmasks the detector in the controller, which
+neither latches nor reports a masked one. Both start disabled, so nothing is
+delivered, not even an interrupt, until one is switched on.
+
+##### Enabling in sysfs
+
+libIIO cannot reach event attributes (see below), so write them directly. Find
+the device first, as the `iio:deviceN` number follows probe order:
+
+```sh
+dev=$(dirname $(grep -l '^ssaiot-sc-ir$' /sys/bus/iio/devices/iio:device*/name))
+```
+
+Then switch the detectors on, each on its own:
+
+```sh
+echo 1 > "$dev/events/in_proximity0_thresh_rising_en"
+echo 1 > "$dev/events/in_proximity1_thresh_rising_en"
+```
+
+Read them back to confirm:
+
+```sh
+grep -H . "$dev"/events/*
+```
+
+Writing `0` masks a detector in the controller again.
 
 ##### Detection, with no tooling
 
-The interrupt counters advance on every detection whether or not userspace
-enabled the event:
+An enabled detector advances its interrupt counter on every detection:
 
 ```sh
 grep -E 'presence|activity' /proc/interrupts
 ```
 
-The motion detector's interrupt is named `activity`, not `motion`.
-
 Walk into the field of view, run it again, and the matching counter has stepped.
+A counter that never moves means its event attribute is still `0`.
 
 ##### Detection with libIIO
 
