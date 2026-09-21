@@ -101,9 +101,9 @@ int IR_SENSOR_Init(void)
         return IR_INIT_STEP;
 
     /* set gain mode */
-    if (sths34pf80_gain_mode_set(&ir_sensor_ctx, STHS34PF80_GAIN_DEFAULT_MODE) != 0)
+    if (sths34pf80_gain_mode_set(&ir_sensor_ctx, STHS34PF80_GAIN_WIDE_MODE) != 0)
         return IR_INIT_STEP;
-    ir_config.flags &= ~IR_CFG_FLAG_WIDE_MODE;
+    ir_config.flags |= IR_CFG_FLAG_WIDE_MODE;
 
     /* factory sensitivity, SENS_DATA * 16 + 2048 LSB/degC in default gain mode */
     if (sths34pf80_tobject_sensitivity_get(&ir_sensor_ctx, &sens) != 0)
@@ -114,18 +114,22 @@ int IR_SENSOR_Init(void)
     if (sths34pf80_int_mode_set(&ir_sensor_ctx, int_mode_cfg) != 0)
         return IR_INIT_STEP;
 
-    /* set "INT_OR" to report motion and presence, bypassed in continuous mode */
-    if (sths34pf80_int_or_set(&ir_sensor_ctx, STHS34PF80_INT_MOTION_PRESENCE) != 0)
-        return IR_INIT_STEP;
+    /* The embedded algorithms, and the ambient compensation they use, are not
+     * available in wide mode; configure them in default gain mode only. */
+    if (!(ir_config.flags & IR_CFG_FLAG_WIDE_MODE)) {
+        /* set "INT_OR" to report motion and presence, bypassed in continuous mode */
+        if (sths34pf80_int_or_set(&ir_sensor_ctx, STHS34PF80_INT_MOTION_PRESENCE) != 0)
+            return IR_INIT_STEP;
 
-    if (sths34pf80_presence_threshold_set(&ir_sensor_ctx, IR_THS_PRESENCE) != 0)
-        return IR_INIT_STEP;
+        if (sths34pf80_presence_threshold_set(&ir_sensor_ctx, IR_THS_PRESENCE) != 0)
+            return IR_INIT_STEP;
 
-    if (sths34pf80_motion_threshold_set(&ir_sensor_ctx, ir_ths) != 0)
-        return IR_INIT_STEP;
+        if (sths34pf80_motion_threshold_set(&ir_sensor_ctx, ir_ths) != 0)
+            return IR_INIT_STEP;
 
-    if (sths34pf80_tobject_algo_compensation_set(&ir_sensor_ctx, 1) != 0)
-        return IR_INIT_STEP;
+        if (sths34pf80_tobject_algo_compensation_set(&ir_sensor_ctx, 1) != 0)
+            return IR_INIT_STEP;
+    }
 
     /*
      * Drive interrupt signal from data-ready, i.e. per sample.
@@ -272,11 +276,18 @@ static int IR_ReadSample(uint32_t tick)
     smp.timestamp = IR_TicksTo25us(tick);
 
     /* into locals: the fields are packed, so their addresses are unaligned */
-    if (IR_SENSOR_ReadPresence(&presence) != 0)
-        return -1;
+    if (ir_config.flags & IR_CFG_FLAG_WIDE_MODE) {
+        /* TODO: compute presence and motion on the MCU from tobject, the
+         * sensor's algorithms are not available in wide mode */
+        presence = 0;
+        motion = 0;
+    } else {
+        if (IR_SENSOR_ReadPresence(&presence) != 0)
+            return -1;
 
-    if (IR_SENSOR_ReadMotion(&motion) != 0)
-        return -1;
+        if (IR_SENSOR_ReadMotion(&motion) != 0)
+            return -1;
+    }
 
     if (IR_SENSOR_ReadTAmbient(&tambient) != 0)
         return -1;
@@ -357,6 +368,11 @@ static int IR_ReadEvents(void)
     if (sths34pf80_read_reg(&ir_sensor_ctx, STHS34PF80_FUNC_STATUS,
                             (uint8_t *)&status, 1) != 0)
         return -1;
+
+    /* No algorithms in wide mode, so no events; the read above still clears
+     * data-ready. TODO: raise events from MCU-side presence and motion. */
+    if (ir_config.flags & IR_CFG_FLAG_WIDE_MODE)
+        return 0;
 
     if (status.mot_flag)
         events |= IR_EVT_MOTION;

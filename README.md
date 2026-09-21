@@ -280,7 +280,7 @@ Notes on individual commands:
 
   | Byte | Field | Encoding |
   |------|-------|----------|
-  | 0 | FLAGS | bit 0: wide gain mode, `tObj` and SENSITIVITY are one eighth of their default gain mode values. Always 0 today |
+  | 0 | FLAGS | bit 0: wide gain mode, `tObj` and SENSITIVITY are one eighth of their default gain mode values. |
   | 1 | SENSITIVITY | uint8, `tObj` sensitivity in units of 16 LSB/°C, factory calibrated per unit; 128 is 2048 LSB/°C |
 
   `tObj` in °C is `tObj / (SENSITIVITY × 16)`, divided by a further 8 when the
@@ -828,9 +828,9 @@ Threshold (mg) = FS(g) × (threshold / 64) × 1000
 ### 3.2 Infrared Sensor (IR):
 
 Sensor: STHS34PF80 on I2C1, continuous mode at 8 Hz with 32 averages per
-object sample, in the default gain mode. The `INT` line is driven by **data
-ready** (`IEN = 01`) rather than by the presence and motion algorithms. Data
-ready is latched, and reading `FUNC_STATUS` clears it.
+object sample. The `INT` line is driven by **data ready** (`IEN = 01`)
+rather than by the presence and motion algorithms. Data ready is latched,
+and reading `FUNC_STATUS` clears it.
 
 At init the sensor is put into power-down before it is configured — it is not
 reset with the MCU and may still be sampling from before — and its factory
@@ -884,7 +884,7 @@ Flag cleared when signal < (threshold − hysteresis)
 | 300       | 50         | ≥0.15°C             | Low sensitivity, short range      |
 | 400       | 50         | ≥0.2°C              | Minimal sensitivity, very stable  |
 
-The firmware sets the presence threshold to **200** (≈0.1 °C), ST's default,
+In default gain mode the firmware sets the presence threshold to **200** (≈0.1 °C), ST's default,
 and the motion threshold to **1000** (≈0.5 °C), both at build time. Tested
 indoors at 8 Hz: a hand 10 cm above the sensor drives presence to about 8600;
 the board at rest wanders within ±170.
@@ -893,6 +893,11 @@ The hysteresis registers are not written, so hysteresis stays at the sensor
 default of 50: a flag sets at its threshold and clears 50 below it. ST pairs
 50 with 200; against 1000 it is a 5% band.
 
+Due to placement of the IR sensor on PCB rev. 1.1, the sensor is actively heated
+and must be configured in wide mode to avoid clipping. Therefore the embedded
+algorithms are not available and currently disabled.
+
+They may be re-implemented in software by the MCU.
 
 ### 3.3 Battery Charging:
 
@@ -978,6 +983,11 @@ Current firmware behaviour the master side should be aware of.
   condition. IR presence and motion are re-raised once per sample period, eight
   times a second, for as long as they are detected. See
   [Every byte answers "what fired", never "what is true now"](#every-byte-answers-what-fired-never-what-is-true-now).
+- **IR presence and motion detection are disabled.** The sensor runs in wide
+  gain mode, which does not support its embedded algorithms: the `presence`
+  and `motion` fields read 0 and no IR events are raised. `Read IR config`
+  reports the mode in its FLAGS byte. The entries below describe the
+  detectors in default gain mode.
 - **Presence and motion currently return the same value.** The STHS34PF80's filter
   bandwidths (`LPF_M`, `LPF_P`, `LPF_P_M`, `LPF_A_T`) are never configured, so they
   stay at their reset divider and the two algorithm outputs are the same signal.
