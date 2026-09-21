@@ -170,20 +170,21 @@ Once v1.0 will be released, this section shall be updated.
 ### Infrared
 
 The infrared driver registers one IIO device, `ssaiot-sc-ir`, carrying the
-STHS34PF80's two detector signals and its ambient temperature. It is buffer
-capable and timestamps every sample. Requires `CONFIG_IIO_BUFFER` and
-`CONFIG_IIO_KFIFO_BUF`.
+readings the controller reports. It is buffer capable and timestamps every
+sample. Requires `CONFIG_IIO_BUFFER` and `CONFIG_IIO_KFIFO_BUF`.
 
-The sensor samples continuously at 30 Hz by default, configurable in controller
+The sensor samples continuously at 8 Hz by default, configurable in controller
 firmware.
 
-The two detector channels are told apart by their labels:
+The two detector channels are told apart by their labels, the two temperatures
+by their modifiers:
 
 | Channel | Label | Reading |
 |---------|-------|---------|
 | `proximity0` | `presence` | stationary body in the field of view |
 | `proximity1` | `motion` | movement in the field of view |
-| `temp` | `ambient` | the sensor's own package temperature |
+| `temp_ambient` | `ambient` | the sensor's own package temperature |
+| `temp_object` | `object` | radiation from the field of view |
 
 ```sh
 iio_attr -c ssaiot-sc-ir proximity0 label
@@ -191,34 +192,13 @@ iio_attr -c ssaiot-sc-ir proximity0 label
 
 There is no `raw` attribute. The controller serves readings from a queue that is
 consumed by being read, so there is no current value to hand out one at a time.
-All three arrive together in one record, so they always scan together and the
+All four arrive together in one record, so they always scan together and the
 sample layout is fixed. Ensure to pass buffer size 5, this is the maximum samples
 returned in a single i2c transaction - otherwise samples might be lost.
 Reading 60 samples drains the controller buffer once:
 
 ```sh
 iio_readdev -b 5 -s 60 ssaiot-sc-ir > ir.bin
-```
-
-At a low output data rate the libiio tools give up before the buffer fills.
-Reading the character device directly avoids their timeout:
-
-```sh
-cd /sys/bus/iio/devices/iio:device5
-echo 1 > scan_elements/in_proximity0_en
-echo 1 > scan_elements/in_proximity1_en
-echo 1 > scan_elements/in_temp_en
-echo 1 > scan_elements/in_timestamp_en
-echo 16 > buffer/length
-echo 1 > buffer/enable
-dd if=/dev/iio:device5 bs=16 count=4 2>/dev/null | hexdump -C
-echo 0 > buffer/enable
-```
-
-Find the device number first, it is not stable across boots:
-
-```sh
-grep -H . /sys/bus/iio/devices/iio:device*/name
 ```
 
 Each sample is 16 bytes:
@@ -228,19 +208,28 @@ Each sample is 16 bytes:
 | 0-1 | presence | int16, unitless |
 | 2-3 | motion | int16, unitless |
 | 4-5 | ambient | int16, apply `scale` for millidegrees |
-| 6-7 | padding | |
+| 6-7 | object | int16, apply `scale` for millidegrees |
 | 8-15 | timestamp | int64, nanoseconds on `current_timestamp_clock` |
 
-Presence and motion carry no scale. They are differences between two of the
-sensor's internal low-pass filters, so they mean something only against the
-detector thresholds, which are set in controller firmware. Ambient is 100 LSB
-per degree, reported as a `scale` of 10:
+Both temperatures carry a `scale` to millidegrees:
 
 ```sh
-iio_attr -c ssaiot-sc-ir temp scale
+iio_attr -c ssaiot-sc-ir temp_ambient scale
+iio_attr -c ssaiot-sc-ir temp_object scale
 ```
 
-The package temperature is not guaranteed accurate, use only as indicator.
+Ambient is 100 LSB per degree, so its scale is a fixed 10. The object reading is
+the radiation in the field of view, read as a temperature difference against the
+package, and its scale is not fixed: the sensor is calibrated per unit and the
+gain mode divides that calibration, so the driver reads the sensitivity from the
+controller at probe. It is around 2048 LSB per degree, a scale near 0.488.
+
+Presence and motion are low-pass filters over the object reading and so share
+its unit, but carry no scale of their own: a proximity channel reads as metres
+once one is applied. They mean something only against the detector thresholds,
+which are set in controller firmware.
+
+Neither temperature is guaranteed accurate, use only as indicator.
 
 #### Events
 

@@ -23,7 +23,20 @@ struct ssaiot_sc_ir_sample {
 	__le16 presence; /* raw algorithm output */
 	__le16 motion; /* raw algorithm output */
 	__le16 tamb; /* raw, 100 LSB per degree celsius */
+	__le16 tobject; /* raw, scaled by SENSITIVITY below */
 } __packed;
+
+struct ssaiot_sc_ir_config {
+	u8 flags;
+	u8 sensitivity; /* of tobject in default gain mode, in units of 16 LSB/degC */
+} __packed;
+
+#define SSAIOT_SC_IR_WIDE_GAIN		BIT(0)
+
+/* unit of the sensitivity field in default gain mode */
+#define SSAIOT_SC_IR_SENS_PER_LSB	16
+/* unit of the sensitivity field in wide gain mode */
+#define SSAIOT_SC_IR_SENS_PER_LSB_WIDE	2
 
 /* time unit of the controller's timebase, 25us/LSB */
 #define SSAIOT_SC_IR_TICK_NS 25000
@@ -57,6 +70,7 @@ enum ssaiot_sc_ir_ev {
 #define SSAIOT_SC_IR_SCAN_PRESENCE 0
 #define SSAIOT_SC_IR_SCAN_MOTION 1
 #define SSAIOT_SC_IR_SCAN_TAMB 2
+#define SSAIOT_SC_IR_SCAN_TOBJ 3
 
 /* driver private data */
 struct ssaiot_sc_ir_priv {
@@ -64,13 +78,17 @@ struct ssaiot_sc_ir_priv {
 	struct iio_dev *indio_dev;
 	struct delayed_work work;
 
-	/* one scan includes presence, motion, ambient + timestamp */
+	/* one scan includes presence, motion, ambient, object + timestamp */
 	struct {
 		s16 presence;
 		s16 motion;
 		s16 tamb;
+		s16 tobject;
 		aligned_s64 timestamp;
 	} scan;
+
+	/* the controller's own configuration, which the object scale follows */
+	struct ssaiot_sc_ir_config config;
 
 	/* which detectors userspace asked to hear about, and their interrupts */
 	unsigned long events;
@@ -139,6 +157,8 @@ static void ssaiot_sc_ir_poll(struct work_struct *work)
 				(s16)le16_to_cpu(resp.sample[i].motion);
 			priv->scan.tamb =
 				(s16)le16_to_cpu(resp.sample[i].tamb);
+			priv->scan.tobject =
+				(s16)le16_to_cpu(resp.sample[i].tobject);
 
 			iio_push_to_buffers_with_timestamp(priv->indio_dev,
 					&priv->scan,
@@ -185,19 +205,39 @@ static const struct iio_buffer_setup_ops ssaiot_sc_ir_setup_ops = {
  * the way past. The buffer is the whole interface; read one sample from it if
  * that is all that is wanted.
  *
- * Presence and motion carry no scale either. They are the differences between
- * two of the sensor's internal low-pass filters, so they have no unit and are
- * meaningful only against the detector thresholds.
+ * Presence and motion are differences between low-pass filters over the object
+ * reading, so they share its unit. Neither carries a scale: a proximity channel
+ * reads as metres once one is applied. Both temperatures carry one - the
+ * ambient's fixed by the protocol, the object's following the part and the gain
+ * mode and so coming from the controller.
  */
 static int ssaiot_sc_ir_read_raw(struct iio_dev *indio_dev,
 				 struct iio_chan_spec const *chan,
 				 int *val, int *val2, long mask)
 {
+	struct ssaiot_sc_ir_priv *priv = iio_priv(indio_dev);
+
 	switch (mask) {
 	case IIO_CHAN_INFO_SCALE:
-		/* 100 LSB per degree against an abi in millidegrees */
-		*val = 10;
-		return IIO_VAL_INT;
+		switch (chan->channel2) {
+		case IIO_MOD_TEMP_AMBIENT:
+			/* 100 LSB per degree against an abi in millidegrees */
+			*val = 10;
+			return IIO_VAL_INT;
+
+		case IIO_MOD_TEMP_OBJECT:
+			/* Millidegrees per LSB, scale depends on gain mode */
+			*val = 1000;
+			*val2 = priv->config.sensitivity;
+			if (priv->config.flags & SSAIOT_SC_IR_WIDE_GAIN)
+				*val2 *= SSAIOT_SC_IR_SENS_PER_LSB_WIDE;
+			else
+				*val2 *= SSAIOT_SC_IR_SENS_PER_LSB;
+			return IIO_VAL_FRACTIONAL;
+
+		default:
+			return -EINVAL;
+		}
 
 	default:
 		return -EINVAL;
@@ -218,6 +258,9 @@ static int ssaiot_sc_ir_read_label(struct iio_dev *indio_dev,
 
 	case SSAIOT_SC_IR_SCAN_TAMB:
 		return sysfs_emit(label, "ambient\n");
+
+	case SSAIOT_SC_IR_SCAN_TOBJ:
+		return sysfs_emit(label, "object\n");
 
 	default:
 		return -EINVAL;
@@ -335,6 +378,8 @@ static const struct iio_chan_spec ssaiot_sc_ir_channels[] = {
 	{
 		/* the sensor's own package, not the air in front of it */
 		.type = IIO_TEMP,
+		.modified = 1,
+		.channel2 = IIO_MOD_TEMP_AMBIENT,
 		.scan_index = SSAIOT_SC_IR_SCAN_TAMB,
 		.scan_type = {
 			.sign = 's',
@@ -344,13 +389,31 @@ static const struct iio_chan_spec ssaiot_sc_ir_channels[] = {
 		},
 		.info_mask_separate = BIT(IIO_CHAN_INFO_SCALE),
 	},
-	IIO_CHAN_SOFT_TIMESTAMP(3),
+	{
+		/*
+		 * Radiation from the field of view, as a temperature difference
+		 * against the sensor's own package, which it takes for the
+		 * room's. Presence and motion are filters over this signal.
+		 */
+		.type = IIO_TEMP,
+		.modified = 1,
+		.channel2 = IIO_MOD_TEMP_OBJECT,
+		.scan_index = SSAIOT_SC_IR_SCAN_TOBJ,
+		.scan_type = {
+			.sign = 's',
+			.realbits = 16,
+			.storagebits = 16,
+			.endianness = IIO_CPU,
+		},
+		.info_mask_separate = BIT(IIO_CHAN_INFO_SCALE),
+	},
+	IIO_CHAN_SOFT_TIMESTAMP(4),
 };
 
 /* one record carries all three readings, so scan them together */
 static const unsigned long ssaiot_sc_ir_scan_masks[] = {
 	BIT(SSAIOT_SC_IR_SCAN_PRESENCE) | BIT(SSAIOT_SC_IR_SCAN_MOTION) |
-	BIT(SSAIOT_SC_IR_SCAN_TAMB),
+	BIT(SSAIOT_SC_IR_SCAN_TAMB) | BIT(SSAIOT_SC_IR_SCAN_TOBJ),
 	0
 };
 
@@ -382,6 +445,32 @@ static int ssaiot_sc_ir_request_event(struct device *dev,
 	return 0;
 }
 
+/* read controller active configuration */
+static int ssaiot_sc_ir_read_config(struct device *dev,
+				    struct ssaiot_sc_ir_priv *priv)
+{
+	u8 data_len;
+	int ret;
+
+	ret = ssaiot_sc_xfer(priv->sc, SSAIOT_SC_CMD_SENSOR_CONFIG,
+			     SSAIOT_SC_SENSOR_IR, NULL, 0,
+			     (u8 *)&priv->config, sizeof(priv->config),
+			     &data_len, NULL, NULL);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to read infrared config.\n");
+
+	if (data_len < sizeof(priv->config))
+		return dev_err_probe(dev, -EPROTO,
+				     "Controller reports %u bytes of infrared config, need %zu.\n",
+				     data_len, sizeof(priv->config));
+
+	if (!priv->config.sensitivity)
+		return dev_err_probe(dev, -EPROTO,
+				     "Controller reports invalid infrared sensitivity.\n");
+
+	return 0;
+}
+
 static int ssaiot_sc_ir_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -401,6 +490,10 @@ static int ssaiot_sc_ir_probe(struct platform_device *pdev)
 	priv->indio_dev = indio_dev;
 	platform_set_drvdata(pdev, priv);
 	INIT_DELAYED_WORK(&priv->work, ssaiot_sc_ir_poll);
+
+	ret = ssaiot_sc_ir_read_config(dev, priv);
+	if (ret)
+		return ret;
 
 	indio_dev->name = "ssaiot-sc-ir";
 	indio_dev->modes = INDIO_DIRECT_MODE;
