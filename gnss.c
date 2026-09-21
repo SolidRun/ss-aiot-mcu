@@ -142,9 +142,6 @@ static int ssaiot_sc_gnss_probe(struct platform_device *pdev)
 	struct gnss_device *gdev;
 	int ret;
 
-	/* the mfd cell has no dedicated dt node, reuse parent */
-	dev->of_node = dev->parent->of_node;
-
 	gnss = devm_kzalloc(dev, sizeof(*gnss), GFP_KERNEL);
 	if (!gnss)
 		return -ENOMEM;
@@ -191,6 +188,13 @@ static int ssaiot_sc_gnss_remove(struct platform_device *pdev)
 	return 0;
 }
 
+/* a cell with a dt node reports an of: modalias, which is what autoloads this */
+static const struct of_device_id ssaiot_sc_gnss_of_match[] = {
+	{ .compatible = "solidrun,solidsense-aiot-system-controller-gnss" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, ssaiot_sc_gnss_of_match);
+
 /*
  * The id must match the MFD cell name and is capped at PLATFORM_NAME_SIZE,
  * so it stays short. Since an id table suppresses the driver name fallback in
@@ -205,6 +209,7 @@ MODULE_DEVICE_TABLE(platform, ssaiot_sc_gnss_id_table);
 static struct platform_driver ssaiot_sc_gnss_driver = {
 	.driver = {
 		.name = "solidsense-aiot-system-controller-gnss",
+		.of_match_table = ssaiot_sc_gnss_of_match,
 	},
 	.probe = ssaiot_sc_gnss_probe,
 	.remove = ssaiot_sc_gnss_remove,

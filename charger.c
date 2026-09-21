@@ -235,9 +235,6 @@ static int ssaiot_sc_charger_probe(struct platform_device *pdev)
 	struct power_supply *psy;
 	int ret;
 
-	/* the mfd cell has no dedicated dt node, reuse parent */
-	dev->of_node = dev->parent->of_node;
-
 	chg = devm_kzalloc(dev, sizeof(*chg), GFP_KERNEL);
 	if (!chg)
 		return -ENOMEM;
@@ -275,6 +272,13 @@ static int ssaiot_sc_charger_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/* a cell with a dt node reports an of: modalias, which is what autoloads this */
+static const struct of_device_id ssaiot_sc_charger_of_match[] = {
+	{ .compatible = "solidrun,solidsense-aiot-system-controller-charger" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, ssaiot_sc_charger_of_match);
+
 static const struct platform_device_id ssaiot_sc_charger_id_table[] = {
 	{ "ssaiot-sc-charger", 0 },
 	{ /* sentinel */ }
@@ -284,6 +288,7 @@ MODULE_DEVICE_TABLE(platform, ssaiot_sc_charger_id_table);
 static struct platform_driver ssaiot_sc_charger_driver = {
 	.driver = {
 		.name = "solidsense-aiot-system-controller-charger",
+		.of_match_table = ssaiot_sc_charger_of_match,
 	},
 	.probe = ssaiot_sc_charger_probe,
 	.id_table = ssaiot_sc_charger_id_table,

@@ -23,20 +23,23 @@ for events belonging to another.
 
 Sub-devices are plain platform drivers, registered as the following cells:
 
-| Cell | Function | Named IRQs |
-|------|----------|------------|
-| `ssaiot-sc-led` | LED | - |
-| `ssaiot-sc-ir` | Infrared presence and motion sensor | `activity`, `presence` |
-| `ssaiot-sc-acc` | Accelerometer | `motion`, `tilt`, `freefall` |
-| `ssaiot-sc-gnss` | GNSS NMEA passthrough | - |
-| `ssaiot-sc-charger` | Battery charger status | - |
-| `ssaiot-sc-rtc` | Real-time clock | - |
+| Cell | Function | Device-tree node | Named IRQs |
+|------|----------|------------------|------------|
+| `ssaiot-sc-led` | LED | `led-controller` | - |
+| `ssaiot-sc-ir` | Infrared presence and motion sensor | `proximity-sensor` | `activity`, `presence` |
+| `ssaiot-sc-acc` | Accelerometer | `accelerometer` | `motion`, `tilt`, `freefall` |
+| `ssaiot-sc-gnss` | GNSS NMEA passthrough | `gnss` | - |
+| `ssaiot-sc-charger` | Battery charger status | `charger` | - |
+| `ssaiot-sc-rtc` | Real-time clock | `rtc` | - |
 
 A sub-device reaches the core with `dev_get_drvdata(pdev->dev.parent)`,
 addresses its own function through the matching `SSAIOT_SC_SENSOR_*` id, and
-claims any interrupt it needs with `platform_get_irq_byname()`. Adding a
-function means adding a cell to [`mfd.c`](mfd.c) and writing the driver; no
-change to the transport is required.
+claims any interrupt it needs with `platform_get_irq_byname()`. It is given its
+own device-tree node, so properties, phandles and interrupts belong to the
+function rather than to the controller as a whole. Adding a function means
+adding a cell to [`mfd.c`](mfd.c) with the compatible of its node, describing
+that node in the device tree, and writing the driver; no change to the
+transport is required.
 
 At probe the core asks the controller to identify itself, so which firmware is
 running can be read back from the kernel log:
@@ -306,15 +309,73 @@ sc: system-controller@18 {
 	compatible = "solidrun,solidsense-aiot-system-controller";
 	reg = <0x18>;
 	interrupts-extended = <&pinctrl RZG2L_GPIO(5, 6) IRQ_TYPE_LEVEL_LOW>;
+	interrupt-controller;
+	#interrupt-cells = <1>;
+
+	sc_led: led-controller {
+		compatible = "solidrun,solidsense-aiot-system-controller-led";
+	};
+
+	sc_ir: proximity-sensor {
+		compatible = "solidrun,solidsense-aiot-system-controller-ir";
+		interrupts-extended = <&sc 1>, <&sc 2>;
+		interrupt-names = "activity", "presence";
+	};
+
+	sc_accel: accelerometer {
+		compatible = "solidrun,solidsense-aiot-system-controller-accelerometer";
+		interrupts-extended = <&sc 3>, <&sc 4>, <&sc 5>;
+		interrupt-names = "motion", "tilt", "freefall";
+	};
+
+	sc_gnss: gnss {
+		compatible = "solidrun,solidsense-aiot-system-controller-gnss";
+	};
+
+	sc_charger: charger {
+		compatible = "solidrun,solidsense-aiot-system-controller-charger";
+	};
+
+	sc_rtc: rtc {
+		compatible = "solidrun,solidsense-aiot-system-controller-rtc";
+		interrupts-extended = <&sc 6>;
+		interrupt-names = "alarm";
+	};
 };
 ```
 
 Note IRQ pin must enable integrated pullup in pinconfig!
 
+One child node per function, each named for the class of device it is, so that
+a sub-device has somewhere of its own to carry properties and a phandle to be
+referred by. The driver for a cell is handed the node whose compatible it
+declares in [`mfd.c`](mfd.c); a missing node is reported as
+`Failed to locate of_node` and leaves that sub-device without properties.
+
+The controller multiplexes every event onto the one line above, and is itself
+an interrupt controller for what it demultiplexes from it. A child names the
+interrupts it wants, one cell each, with no trigger type to choose - the
+controller decides for itself what raises each one:
+
+| Number | Interrupt | Consumer |
+|--------|-----------|----------|
+| 0 | controller restarted, its configuration lost | the core itself |
+| 1 | infrared motion | `proximity-sensor`, as `activity` |
+| 2 | infrared presence | `proximity-sensor`, as `presence` |
+| 3 | accelerometer motion | `accelerometer`, as `motion` |
+| 4 | accelerometer tilt | `accelerometer`, as `tilt` |
+| 5 | accelerometer free-fall | `accelerometer`, as `freefall` |
+| 6 | rtc alarm | `rtc`, as `alarm` |
+
+Number 0 is handled by the core and is named by no child. A child must reach
+the controller through `interrupts-extended`: a plain `interrupts` property
+would be resolved against whatever the controller's own node inherits, which is
+the SoC's interrupt controller, not this one.
+
 Optional properties:
 
-- `monitored-battery` phandle to support capacity reporting from an ocv table.
-  There is no temperature sensor, use fixed 20°C.
+- `monitored-battery` on the `charger` node, to support capacity reporting from
+  an ocv table. There is no temperature sensor, use fixed 20°C.
 
   Generic example for single cell type 18650 3.7V nominal and 2500mAh (LiCoO2):
   ```c
@@ -333,14 +394,14 @@ Optional properties:
   	};
   };
 
-  &sc {
+  &sc_charger {
   	monitored-battery = <&bat>;
   };
   ```
 
   All battery properties shown in example must be specified to enable capacity reporting.
 
-- `system-power-controller` marks the controller as the board's power-off method, cutting power on shutdown.
+- `system-power-controller` on the controller node itself, marking it as the board's power-off method, cutting power on shutdown.
 
   There is no power button, only the controller can re-enable power
   based on sensor configuration, rtc or on controller reset.

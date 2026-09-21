@@ -478,9 +478,6 @@ static int ssaiot_sc_ir_probe(struct platform_device *pdev)
 	struct iio_dev *indio_dev;
 	int ret;
 
-	/* the mfd cell has no dedicated dt node, reuse parent */
-	dev->of_node = dev->parent->of_node;
-
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*priv));
 	if (!indio_dev)
 		return -ENOMEM;
@@ -591,6 +588,13 @@ static int ssaiot_sc_ir_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(ssaiot_sc_ir_pm_ops, ssaiot_sc_ir_suspend,
 				ssaiot_sc_ir_resume);
 
+/* a cell with a dt node reports an of: modalias, which is what autoloads this */
+static const struct of_device_id ssaiot_sc_ir_of_match[] = {
+	{ .compatible = "solidrun,solidsense-aiot-system-controller-ir" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, ssaiot_sc_ir_of_match);
+
 /*
  * The id must match the MFD cell name and is capped at PLATFORM_NAME_SIZE,
  * so it stays short. Since an id table suppresses the driver name fallback in
@@ -605,6 +609,7 @@ MODULE_DEVICE_TABLE(platform, ssaiot_sc_ir_id_table);
 static struct platform_driver ssaiot_sc_ir_driver = {
 	.driver = {
 		.name = "solidsense-aiot-system-controller-ir",
+		.of_match_table = ssaiot_sc_ir_of_match,
 		.pm = pm_sleep_ptr(&ssaiot_sc_ir_pm_ops),
 	},
 	.probe = ssaiot_sc_ir_probe,

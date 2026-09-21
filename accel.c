@@ -590,9 +590,6 @@ static int ssaiot_sc_accel_probe(struct platform_device *pdev)
 	struct ssaiot_sc_accel_priv *priv;
 	int ret;
 
-	/* the mfd cell has no dedicated dt node, reuse parent */
-	dev->of_node = dev->parent->of_node;
-
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
@@ -685,6 +682,13 @@ static int ssaiot_sc_accel_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(ssaiot_sc_accel_pm_ops, ssaiot_sc_accel_suspend,
 				ssaiot_sc_accel_resume);
 
+/* a cell with a dt node reports an of: modalias, which is what autoloads this */
+static const struct of_device_id ssaiot_sc_accel_of_match[] = {
+	{ .compatible = "solidrun,solidsense-aiot-system-controller-accelerometer" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, ssaiot_sc_accel_of_match);
+
 /*
  * The id must match the MFD cell name and is capped at PLATFORM_NAME_SIZE,
  * so it stays short. Since an id table suppresses the driver name fallback in
@@ -699,6 +703,7 @@ MODULE_DEVICE_TABLE(platform, ssaiot_sc_accel_id_table);
 static struct platform_driver ssaiot_sc_accel_driver = {
 	.driver = {
 		.name = "solidsense-aiot-system-controller-accel",
+		.of_match_table = ssaiot_sc_accel_of_match,
 		.pm = pm_sleep_ptr(&ssaiot_sc_accel_pm_ops),
 	},
 	.probe = ssaiot_sc_accel_probe,

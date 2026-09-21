@@ -254,8 +254,14 @@ static int ssaiot_sc_irq_map(struct irq_domain *d, unsigned int virq,
 	return 0;
 }
 
+/*
+ * One cell, carrying the number of the interrupt alone. The controller decides
+ * for itself what raises each one, so there is no trigger type for a consumer
+ * to ask for.
+ */
 static const struct irq_domain_ops ssaiot_sc_irq_domain_ops = {
 	.map = ssaiot_sc_irq_map,
+	.xlate = irq_domain_xlate_onecell,
 };
 
 /**
@@ -366,7 +372,13 @@ int ssaiot_sc_irq_probe(struct device *dev)
 	unsigned int virq;
 	int ret;
 
-	priv->irq_domain = irq_domain_add_linear(NULL, SSAIOT_SC_NUM_IRQS,
+	/*
+	 * Bound to the controller's own node, which declares itself an
+	 * interrupt controller, so that a sub-device names the interrupt it
+	 * wants in the device tree and of_irq_get() finds this domain.
+	 */
+	priv->irq_domain = irq_domain_add_linear(dev_of_node(dev),
+						 SSAIOT_SC_NUM_IRQS,
 						 &ssaiot_sc_irq_domain_ops,
 						 priv);
 	if (!priv->irq_domain)
@@ -403,10 +415,9 @@ int ssaiot_sc_irq_probe(struct device *dev)
 		return dev_err_probe(dev, ret, "Failed to claim mcu source.\n");
 
 	/*
-	 * The sub-device mappings are created by mfd_add_devices(), which calls
-	 * irq_create_mapping() for every IRQ resource its cells declare and
-	 * stores the result in the resource. Only the core's own virq is mapped
-	 * here.
+	 * A sub-device's mapping is created when it resolves its own interrupt
+	 * against this domain. The controller's own restart is named by nobody,
+	 * so it is mapped here.
 	 */
 	virq = irq_create_mapping(priv->irq_domain, SSAIOT_SC_IRQ_MCU_RESTART);
 	if (!virq)

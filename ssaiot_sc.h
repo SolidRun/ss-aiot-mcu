@@ -87,7 +87,11 @@ int ssaiot_sc_xfer(struct ssaiot_sc_priv *priv, u8 cmd, u8 sensor_id,
 
 /* irq api (irq.c) */
 
-/* translated virqs, the first of them handled by the core itself */
+/*
+ * Interrupts the controller demultiplexes, the first of them handled by the
+ * core itself. A sub-device names the rest by number in its device-tree node,
+ * so these values are ABI and may be appended to but not reordered.
+ */
 enum ssaiot_sc_irq {
 	SSAIOT_SC_IRQ_MCU_RESTART = 0,
 	SSAIOT_SC_IRQ_IR_ACTIVITY,

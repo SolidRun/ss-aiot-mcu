@@ -11,47 +11,34 @@
 
 #include "ssaiot_sc.h"
 
-static const struct resource ssaiot_sc_ir_resources[] = {
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_IR_ACTIVITY, "activity"),
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_IR_PRESENCE, "presence"),
-};
-
-static const struct resource ssaiot_sc_acc_resources[] = {
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACCEL_MOTION, "motion"),
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACCEL_TILT, "tilt"),
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_ACCEL_FREEFALL, "freefall"),
-};
-
-static const struct resource ssaiot_sc_rtc_resources[] = {
-	DEFINE_RES_IRQ_NAMED(SSAIOT_SC_IRQ_RTC_ALARM, "alarm"),
-};
-
 /*
  * One cell per logical function of the controller. Sub-devices reach the
  * transport with dev_get_drvdata(pdev->dev.parent) and address their own
  * function through the matching SSAIOT_SC_SENSOR_* id.
  *
- * All cells share the parent firmware node for dt property access.
+ * Each cell names the compatible of its own child node, which mfd_add_device()
+ * finds below the parent and hands to the platform device. Interrupts are
+ * resolved in DT by phandle and not listed as resources.
  */
 static const struct mfd_cell ssaiot_sc_cells[] = {
 	{
 		.name = "ssaiot-sc-led",
+		.of_compatible = "solidrun,solidsense-aiot-system-controller-led",
 	}, {
 		.name = "ssaiot-sc-ir",
-		.resources = ssaiot_sc_ir_resources,
-		.num_resources = ARRAY_SIZE(ssaiot_sc_ir_resources),
+		.of_compatible = "solidrun,solidsense-aiot-system-controller-ir",
 	}, {
 		.name = "ssaiot-sc-acc",
-		.resources = ssaiot_sc_acc_resources,
-		.num_resources = ARRAY_SIZE(ssaiot_sc_acc_resources),
+		.of_compatible = "solidrun,solidsense-aiot-system-controller-accelerometer",
 	}, {
 		.name = "ssaiot-sc-gnss",
+		.of_compatible = "solidrun,solidsense-aiot-system-controller-gnss",
 	}, {
 		.name = "ssaiot-sc-charger",
+		.of_compatible = "solidrun,solidsense-aiot-system-controller-charger",
 	}, {
 		.name = "ssaiot-sc-rtc",
-		.resources = ssaiot_sc_rtc_resources,
-		.num_resources = ARRAY_SIZE(ssaiot_sc_rtc_resources),
+		.of_compatible = "solidrun,solidsense-aiot-system-controller-rtc",
 	},
 };
 
@@ -59,17 +46,15 @@ static const struct mfd_cell ssaiot_sc_cells[] = {
  * ssaiot_sc_mfd_probe() - Register the sub-devices
  * @dev: System controller device
  *
- * Requires ssaiot_sc_irq_probe() to have run, so that the IRQ resources above
- * can be translated against the controller's interrupt domain.
+ * Requires ssaiot_sc_irq_probe() to have run: a sub-device resolves its
+ * interrupts as it probes, and finds nothing until the domain is registered.
  */
 int ssaiot_sc_mfd_probe(struct device *dev)
 {
-	struct ssaiot_sc_priv *priv = dev_get_drvdata(dev);
 	int ret;
 
 	ret = devm_mfd_add_devices(dev, PLATFORM_DEVID_AUTO, ssaiot_sc_cells,
-				   ARRAY_SIZE(ssaiot_sc_cells), NULL, 0,
-				   priv->irq_domain);
+				   ARRAY_SIZE(ssaiot_sc_cells), NULL, 0, NULL);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "Failed to add MFD child devices.\n");
