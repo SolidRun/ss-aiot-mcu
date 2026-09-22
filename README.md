@@ -21,6 +21,21 @@ the read that reports a pending event clears all of them at once. Only
 the result as nested per-source interrupts, so a sub-device never has to poll
 for events belonging to another.
 
+Those same events restore power to a board that has been shut down. The
+controller stays awake with the SoM off and turns it back on when a source it
+still watches fires, which is the only way back up - there is no power button.
+Each sub-device that can do so carries a `power/wakeup` attribute deciding
+whether its source may:
+
+```sh
+grep -H . /sys/bus/platform/devices/ssaiot-sc-*.auto/power/wakeup
+```
+
+It is enabled by default, and is read when the driver probes and again as the
+system shuts down, so writing it takes effect at the next `poweroff` rather than
+at once. Arming the detectors is the other half of it, and belongs to each
+device below.
+
 Sub-devices are plain platform drivers, registered as the following cells:
 
 | Cell | Function | Device-tree node | Named IRQs |
@@ -170,6 +185,20 @@ stepped. A counter that never moves means its event attribute is still `0`.
 The last released version of [libIIO](analogdevicesinc.github.io/libiio/main/) (v0.26) does not support iio event channels.
 Once v1.0 will be released, this section shall be updated.
 
+##### Waking the board from power-off
+
+An armed detector also powers the board back on after `poweroff`, as long as the
+accelerometer is allowed to. Its platform device is named `ssaiot-sc-acc`, not
+`ssaiot-sc-accel` as the iio device is:
+
+```sh
+pdev=$(echo /sys/bus/platform/devices/ssaiot-sc-acc.*.auto)
+cat "$pdev/power/wakeup"
+```
+
+Enable the detectors that should do it as above, leave that `enabled`, and shut
+the board down normally. Moving, tilting or dropping it then restores power.
+
 ### Infrared
 
 The infrared driver registers one IIO device, `ssaiot-sc-ir`, carrying the
@@ -291,6 +320,19 @@ A counter that never moves means its event attribute is still `0`.
 The last released version of [libIIO](analogdevicesinc.github.io/libiio/main/) (v0.26) does not support iio event channels.
 Once v1.0 will be released, this section shall be updated.
 
+##### Waking the board from power-off
+
+An armed detector also powers the board back on after `poweroff`, as long as the
+sensor is allowed to:
+
+```sh
+pdev=$(echo /sys/bus/platform/devices/ssaiot-sc-ir.*.auto)
+cat "$pdev/power/wakeup"
+```
+
+Enable the detectors that should do it as above, leave that `enabled`, and shut
+the board down normally. Walking into the field of view then restores power.
+
 ### RTC
 
 The RTC supports read-only time based on GNSS, and wake on alarm.
@@ -299,6 +341,14 @@ Read the current time using `hwclock -f /dev/rtc0 -r`, this succeeds as soon as 
 
 For wake on alarm, use ` rtcwake` command.
 For example to shutdown and restart after 5 minutes: `rtcwake -m off -s 300`
+
+`-m off` cuts power rather than suspending, and the alarm brings the board back.
+That rests on the same `power/wakeup` attribute as the sensors, enabled by
+default, but needs nothing armed beyond the alarm itself:
+
+```sh
+cat /sys/bus/platform/devices/ssaiot-sc-rtc.*.auto/power/wakeup
+```
 
 ## Device-Tree Binding
 
