@@ -6,8 +6,6 @@ This project implements an I2C slave interface on the STM32U031C8 MCU to control
 
 ## Supported sensors and modules:
 
--LED
-
 -Infrared (IR) sensor
 
 -Accelerometer
@@ -232,9 +230,6 @@ Multi-byte values are little-endian unless stated otherwise.
 | Command Description           | Command                  | Expected Response                           |
 |-------------------------------|--------------------------|--------------------------------------------|
 | Read MCU info                  | {0x12,0x0B,0x00,{}}     | {0x00,6,{API_VERSION, FLAGS, uint32 BUILD_ID}} |
-| Turn ON LED                    | {0x10,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
-| Turn OFF LED                   | {0x11,0x01,0x00,{}}     | {0x00,0x00,{}}                             |
-| Read LED status                | {0x12,0x01,0x00,{}}     | {0x00,1,{0x01}} (0x01=ON, 0x00=OFF)        |
 | Read IR data                   | {0x12,0x02,0x00,{}}     | {0x00,4+N×12,{uint32 now, N × (uint32 timestamp, int16 presence, int16 motion, int16 tAmb, int16 tObj)}}, N = 0..5 |
 | Read IR config                 | {0x13,0x02,0x00,{}}     | {0x00,2,{FLAGS, SENSITIVITY}}              |
 | Read ACC motion data           | {0x12,0x03,0x00,{}}     | {0x00,4+N×10,{uint32 now, N × (uint32 timestamp, int16 x, int16 y, int16 z)}}, N = 0..8 |
@@ -472,8 +467,7 @@ Notes on individual commands:
   This command is **not** required for the MCU to know the time. The MCU syncs
   itself from GNSS with no involvement from the master; the command exists to
   force it early.
-- **Turn ON** is implemented for `SENSOR_LED` only.
-- **Turn OFF** is implemented for `SENSOR_LED` and `SoM` (CPU).
+- **Turn OFF** is implemented for `SoM` (CPU) only.
 - **Turn OFF SoM** must cut power unless fatal internal error occured, since it is too late for host to reconsider.
   Cutting power must be delayed by 1s after i2c response, giving sufficient time for host to process final interrupts.
 
@@ -485,9 +479,7 @@ Total bytes the master should read (`2 + DATA_LEN`):
 
 | Command | Bytes to read | Typical latency |
 |---------|---------------|-----------------|
-| `0x10` / `0x11` (LED on/off) | 2 | immediate |
 | `0x12,0x0B` (MCU info) | 8 | immediate |
-| `0x12,0x01` (LED status) | 3 | immediate |
 | `0x12,0x02` (IR data) | 66 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
 | `0x13,0x02` (IR config) | 4 | immediate |
 | `0x12,0x03` (ACC motion data) | 86 — read all, use `DATA_LEN` | immediate — served from RAM, no bus access |
@@ -941,9 +933,12 @@ Current firmware behaviour the master side should be aware of.
   `STATUS = 0x00`, `DATA_LEN = 0x00`, and a zeroed tail because the transmit
   buffer starts in `.bss`. It is indistinguishable from a successful command that
   produced no payload.
-- **`Turn ON` with any sensor ID other than `SENSOR_LED`** returns
-  `STATUS = 0x00` without doing anything, as does **`Turn OFF`** with any ID
-  other than `SENSOR_LED` or `SENSOR_SOM`.
+- **`Turn OFF` with any sensor ID other than `SENSOR_SOM`** returns
+  `STATUS = 0x00` without doing anything.
+- **The MCU LED is not controllable over I2C.** It blinks as a firmware
+  heartbeat and that is its only behaviour. Command `0x10` and sensor ID `0x01`
+  carried the LED before release and are now reserved; `0x10` answers
+  `STATUS = 0x01`, unknown command.
 - **Only `Read interrupt status` clears interrupt state.** Neither `Read IR data`
   nor the accelerometer reads carry or clear it; the accelerometer's event bits
   are reported solely by `Read interrupt status`. The accelerometer notifies the

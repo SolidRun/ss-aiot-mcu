@@ -21,7 +21,8 @@
  * These commands are used to control sensors over I2C.
  */
 typedef enum {
-    CMD_SENSOR_ON      = 0x10, // Turn sensor ON
+    /* 0x10 was Turn ON, which only ever served the LED. Reserved, do not
+     * reuse: an old master sending it must not reach a different command. */
     CMD_SENSOR_OFF     = 0x11, // Turn sensor OFF
     CMD_SENSOR_READ    = 0x12, // Read data from sensor
     CMD_SENSOR_CONFIG  = 0x13  // Configure sensor settings
@@ -31,7 +32,8 @@ typedef enum {
  * Identifiers for different sensors and modules in the system.
  */
 typedef enum {
-    SENSOR_LED             = 0x01, // LED control
+    /* 0x01 was LED control, removed before release. Reserved, do not reuse:
+     * an old master sending it must not reach a different peripheral. */
     SENSOR_IR              = 0x02, // Infrared sensor
     SENSOR_ACCEL_MOTION    = 0x03, // Accelerometer, motion samples
     SENSOR_GPS             = 0x04, // GPS sensor

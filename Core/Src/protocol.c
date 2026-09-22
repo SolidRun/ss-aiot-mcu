@@ -18,24 +18,6 @@
 extern volatile bool gps_time_synced;
 extern volatile bool gps_time_sync_request;
 
-void Sensor_LED_On(void) {
-	HAL_GPIO_WritePin(LED_MCU_GPIO_Port, LED_MCU_Pin, GPIO_PIN_SET);
-}
-
-void Sensor_LED_Off(void) {
-	HAL_GPIO_WritePin(LED_MCU_GPIO_Port, LED_MCU_Pin, GPIO_PIN_RESET);
-}
-
-void Sensor_LED_Read(uint8_t *data, uint8_t *len, uint8_t *status){
-	*len = 1;
-	*status = 0;
-	if (HAL_GPIO_ReadPin(LED_MCU_GPIO_Port, LED_MCU_Pin)){
-		data[0] = 0x01;
-	}else{
-		data[0] = 0x00;
-	}
-}
-
 /* As Sensor_Accel_Motion_Read: a snapshot of the sample timebase, then up to
  * IR_SAMPLES_PER_READ buffered samples. */
 void Sensor_IR_Read(uint8_t *data, uint8_t *len, uint8_t *status) {
@@ -298,16 +280,8 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
     resp->data_len = 0;
 
     switch (cmd->cmd) {
-        case CMD_SENSOR_ON:
-            if (cmd->sensor_id == SENSOR_LED) {
-                Sensor_LED_On();
-            }
-            break;
-
         case CMD_SENSOR_OFF:
-            if (cmd->sensor_id == SENSOR_LED) {
-                Sensor_LED_Off();
-            } else if (cmd->sensor_id == SENSOR_SOM) {
+        	if (cmd->sensor_id == SENSOR_SOM) {
                 /* schedule power-off after 1s */
                 SomScheduleOff(1000);
                 /* status is success (master can't process failure during shutdown anyhow) */
@@ -316,9 +290,6 @@ void Protocol_ProcessCommand(I2C_Command_t *cmd, I2C_Response_t *resp) {
 
         case CMD_SENSOR_READ:
             switch (cmd->sensor_id) {
-                case SENSOR_LED:
-                	Sensor_LED_Read(resp->data, &resp->data_len, &resp->status);
-                	break;
                 case SENSOR_RTC:
                 	Sensor_RTC_Read(resp->data, &resp->data_len, &resp->status);
                 	break;
