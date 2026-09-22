@@ -233,9 +233,9 @@ static int ssaiot_sc_rtc_probe(struct platform_device *pdev)
 
 	device_init_wakeup(dev, true);
 
-	/* take the source over before the request below unmasks the alarm */
-	ret = ssaiot_sc_irq_claim(rtc->sc, SSAIOT_SC_INT_SRC_RTC,
-				  device_may_wakeup(dev));
+	/* the alarm may restore power to a SoM that has none */
+	ret = ssaiot_sc_irq_set_poweron(rtc->sc, SSAIOT_SC_INT_SRC_RTC,
+					device_may_wakeup(dev));
 	if (ret)
 		return ret;
 

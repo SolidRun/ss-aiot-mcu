@@ -599,8 +599,8 @@ static int ssaiot_sc_accel_probe(struct platform_device *pdev)
 
 	device_init_wakeup(dev, true);
 
-	ret = ssaiot_sc_irq_claim(priv->sc, SSAIOT_SC_INT_SRC_ACC,
-				  device_may_wakeup(dev));
+	ret = ssaiot_sc_irq_set_poweron(priv->sc, SSAIOT_SC_INT_SRC_ACC,
+					device_may_wakeup(dev));
 	if (ret)
 		return ret;
 

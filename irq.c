@@ -112,6 +112,14 @@ static void ssaiot_sc_irq_unmask(struct irq_data *d)
 	ssaiot_sc_irq_set_enable(d, true);
 }
 
+/* mask an interrupt when its first handler is installed */
+static int ssaiot_sc_irq_request_resources(struct irq_data *d)
+{
+	ssaiot_sc_irq_set_enable(d, false);
+
+	return 0;
+}
+
 static void ssaiot_sc_irq_bus_lock(struct irq_data *d)
 {
 	struct ssaiot_sc_priv *priv = irq_data_get_irq_chip_data(d);
@@ -141,7 +149,9 @@ static int ssaiot_sc_irq_set_wake(struct irq_data *d, unsigned int on)
  * mask and unmask only edit the shadow, because the core runs them under the
  * descriptor's raw spinlock where the bus may not be used. It brackets them
  * with bus_lock and bus_sync_unlock, which run outside that lock, so the one
- * transfer happens there however many bits changed.
+ * transfer happens there however many bits changed. request_resources runs
+ * inside the same bracket and edits the shadow for the same reason, so taking
+ * an interrupt over and unmasking it cost one transfer between them.
  *
  * disable has to be given too. Without it disable_irq() is lazy: it records
  * IRQD_IRQ_DISABLED and leaves the masking to the flow handler, and
@@ -157,48 +167,11 @@ static struct irq_chip ssaiot_sc_irq_chip = {
 	.irq_mask = ssaiot_sc_irq_mask,
 	.irq_disable = ssaiot_sc_irq_mask,
 	.irq_unmask = ssaiot_sc_irq_unmask,
+	.irq_request_resources = ssaiot_sc_irq_request_resources,
 	.irq_bus_lock = ssaiot_sc_irq_bus_lock,
 	.irq_bus_sync_unlock = ssaiot_sc_irq_bus_sync_unlock,
 	.irq_set_wake = ssaiot_sc_irq_set_wake,
 };
-
-/**
- * ssaiot_sc_irq_claim() - Take a source over from whatever the controller had
- * @priv: Driver private structure
- * @src: Source the caller owns
- * @poweron: Whether that source may power the SoM on
- *
- * A sub-device calls this once, before requesting any of its interrupts. Until
- * then the source keeps the state the controller booted with, so one whose
- * driver never binds goes on working as the controller left it - an armed
- * alarm still restores power to a SoM that has none, which no driver could
- * arrange after the fact.
- *
- * Every detail bit is cleared, since the interrupts start masked and are
- * unmasked one at a time as userspace asks for them.
- *
- * Return: 0 on success, negative errno on failure.
- */
-int ssaiot_sc_irq_claim(struct ssaiot_sc_priv *priv,
-			enum ssaiot_sc_int_src src, bool poweron)
-{
-	int ret;
-
-	mutex_lock(&priv->irq_lock);
-
-	priv->irq_config.en_detail[src] = 0;
-
-	if (poweron)
-		priv->irq_config.pwr_sources |= BIT(src);
-	else
-		priv->irq_config.pwr_sources &= ~BIT(src);
-
-	ret = ssaiot_sc_irq_sync(priv);
-	mutex_unlock(&priv->irq_lock);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(ssaiot_sc_irq_claim);
 
 /**
  * ssaiot_sc_irq_set_poweron() - Let a source restore SoM power
@@ -207,8 +180,8 @@ EXPORT_SYMBOL_GPL(ssaiot_sc_irq_claim);
  * @on: Whether that source may power the SoM on
  *
  * The controller consults this only while the SoM is off, so a sub-device sets
- * it on the way down rather than keeping it current - nothing reports a write
- * to power/wakeup while running. Granularity is the source rather than the
+ * it as it probes and again on the way down, rather than keeping it current -
+ * nothing reports a write to power/wakeup while running. Granularity is the
  * individual interrupt, which is all that attribute can express anyway, since
  * every cell owns exactly one source.
  *
@@ -404,15 +377,6 @@ int ssaiot_sc_irq_probe(struct device *dev)
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "Failed to read interrupt config.\n");
-
-	/*
-	 * The core is the driver for the controller's own source, so it takes
-	 * it over the way a sub-device does. A restart does not power the SoM
-	 * on, which is a no-op: the restart clears that configuration anyway.
-	 */
-	ret = ssaiot_sc_irq_claim(priv, SSAIOT_SC_INT_SRC_MCU, false);
-	if (ret)
-		return dev_err_probe(dev, ret, "Failed to claim mcu source.\n");
 
 	/*
 	 * A sub-device's mapping is created when it resolves its own interrupt

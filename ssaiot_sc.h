@@ -105,8 +105,6 @@ enum ssaiot_sc_irq {
 
 int ssaiot_sc_irq_probe(struct device *dev);
 void ssaiot_sc_irq_shutdown(struct ssaiot_sc_priv *priv);
-int ssaiot_sc_irq_claim(struct ssaiot_sc_priv *priv,
-			enum ssaiot_sc_int_src src, bool poweron);
 int ssaiot_sc_irq_set_poweron(struct ssaiot_sc_priv *priv,
 			      enum ssaiot_sc_int_src src, bool on);
 
