@@ -1,0 +1,66 @@
+name: CycloneDX Dependency Submission
+description: Convert a CycloneDX SBoM into a dependency snapshot and submit it to the dependency graph
+
+# The dependency graph does not take CycloneDX directly, so the SBoM is
+# converted by snapshot.jq into the format of the dependency submission API:
+# https://docs.github.com/en/rest/dependency-graph/dependency-submission
+#
+# Submitting needs contents: write on the job's token.
+
+inputs:
+  sbom-file:
+    description: Path of the CycloneDX SBoM, relative to the workspace. Also names the manifest in the dependency graph.
+    required: true
+  submit:
+    description: Submit the snapshot. When false the SBoM is only converted, which still fails on a broken SBoM.
+    required: false
+    default: 'true'
+  token:
+    description: Token used for the submission
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  snapshot:
+    description: Path of the generated dependency snapshot
+    value: ${{ steps.convert.outputs.snapshot }}
+
+runs:
+  using: composite
+  steps:
+    # GITHUB_ACTION_PATH is used rather than github.action_path, as only the
+    # former is translated to the path a container job sees.
+    - name: Generate Dependency Snapshot
+      id: convert
+      shell: sh
+      env:
+        SBOM: ${{ inputs.sbom-file }}
+        CORRELATOR: ${{ github.workflow }}-${{ github.job }}
+        URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/.github/actions/cdx-dependency-submission/snapshot.jq
+      run: |
+        SNAPSHOT="$RUNNER_TEMP/dependency-snapshot.json"
+        jq --arg manifest "$SBOM" \
+           --arg sha "$GITHUB_SHA" \
+           --arg ref "$GITHUB_REF" \
+           --arg correlator "$CORRELATOR" \
+           --arg run_id "$GITHUB_RUN_ID" \
+           --arg url "$URL" \
+           -f "$GITHUB_ACTION_PATH/snapshot.jq" \
+           "$SBOM" > "$SNAPSHOT"
+        echo "snapshot=$SNAPSHOT" >> "$GITHUB_OUTPUT"
+
+    - name: Submit Dependency Snapshot
+      if: inputs.submit == 'true'
+      uses: actions/github-script@v8
+      env:
+        SNAPSHOT: ${{ steps.convert.outputs.snapshot }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          const fs = require('fs');
+          const snapshot = JSON.parse(fs.readFileSync(process.env.SNAPSHOT));
+          const { data } = await github.rest.dependencyGraph.createRepositorySnapshot({
+            ...context.repo,
+            ...snapshot,
+          });
+          core.info(`snapshot ${data.id}: ${data.result} ${data.message}`);

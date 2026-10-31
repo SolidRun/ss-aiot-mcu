@@ -39,7 +39,7 @@ jobs:
       - prepare
     timeout-minutes: 10
     permissions:
-      # only needed by the release step below, which runs on tags alone
+      # needed for release step and github dependency graph
       contents: write
     container:
       image: ciserver.ci:5000/${{ github.repository_id }}:stm32cubeide-1.19.0_25607_20250703_0907_amd64
@@ -197,6 +197,13 @@ jobs:
           zip -r "$BUNDLE.zip" "$BUNDLE"
           rm -rf "$BUNDLE"
           echo "bundle=$BUNDLE.zip" >> "$GITHUB_OUTPUT"
+
+      # Generate GitHub Dependency Graph, publish if on main branch
+      - name: Dependency Graph
+        uses: ./.github/actions/cdx-dependency-submission
+        with:
+          sbom-file: sbom_cdx.json
+          submit: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # publish bundle as CI artifact
       - uses: actions/upload-artifact@v7
